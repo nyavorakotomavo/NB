@@ -2,14 +2,17 @@
 """
 NB — Polling des commentaires (Option A : Railway, 30 s, tâche de fond).
 
-Contourne le blocage du webhook en mode Dev : NB va LIRE le feed de la Page
-(action admin standard, OK pour TOUS les commentateurs, sans review ni testeur).
+Contourne le blocage du webhook en mode Dev : NB LIT le feed de la Page
+(action admin standard, OK pour tous les commentateurs, sans review ni testeur).
 
-Le poller NE RÉÉCRIT PAS la logique IA : il réutilise le cerveau du serveur
-(ai_responder / language_detector / intent_analyzer / fb_client / conversation_store).
+Le poller réutilise le cerveau du serveur (ai_responder / language_detector /
+intent_analyzer / fb_client / conversation_store) : même NB, même historique,
+mêmes analytics, même anti-spam que le webhook.
 
-⚠️ MODE DEBUG ACTIF : logs verbeux temporaires pour diagnostiquer pourquoi les
-   nouveaux commentaires sont filtrés. À retirer une fois le bug identifié.
+NOTE mode Dev : Facebook anonymise l'auteur des commentaires (from=None) à la
+lecture. Ce n'est PAS bloquant : on a le message + le comment_id, donc on peut
+répondre. La boucle infinie est évitée autrement (nos réponses sont en niveau 2,
+absentes de cette requête de niveau 1).
 """
 
 import asyncio
@@ -33,7 +36,7 @@ from bot.conversation_store import (
 # Réglages
 # ──────────────────────────────────────────────
 INTERVAL = 30                 # secondes entre 2 cycles
-WINDOW_SECONDS = 7 * 86400    # on regarde les posts des 7 derniers jours
+WINDOW_SECONDS = 7 * 86400    # posts des 7 derniers jours
 MAX_FAIL_PER_COMMENT = 3      # au-delà, on abandonne ce commentaire
 TIMEOUT = 30
 
@@ -52,13 +55,12 @@ def _log(msg: str) -> None:
 
 
 def _parse_ts(iso: str) -> float:
-    """Parse un created_time Facebook, robuste aux variantes de fuseau (Z, +0000, +00:00)."""
+    """Parse created_time Facebook, robuste aux variantes de fuseau (Z, +0000, +00:00)."""
     if not iso:
         return 0.0
     s = iso.strip()
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
-    # fuseau sans deux-points ex: +0000 -> +00:00
     if len(s) >= 5 and s[-5] in "+-" and s[-3] != ":":
         s = s[:-2] + ":" + s[-2:]
     for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
@@ -69,7 +71,6 @@ def _parse_ts(iso: str) -> float:
             return dt.timestamp()
         except ValueError:
             continue
-    # ultime recours : fromisoformat (3.11+)
     try:
         return datetime.fromisoformat(s).timestamp()
     except Exception:
@@ -84,14 +85,13 @@ def _fmt(ts: float) -> str:
 
 
 def _raisons(c: dict) -> list[str]:
+    """Raisons de filtrage (from vide N'EN EST PLUS UNE : on traite sans auteur)."""
     r = []
     if c["ts"] <= _last_ts:
         r.append(f"trop vieux (ts {_fmt(c['ts'])} <= curseur {_fmt(_last_ts)})")
     if c["id"] in _seen:
         r.append("déjà vu")
-    if not c["from_id"]:
-        r.append("from vide")
-    elif c["from_id"] == FB_PAGE_ID:
+    if c["from_id"] == FB_PAGE_ID:
         r.append("c'est la Page")
     return r or ["? (raison inconnue)"]
 
@@ -124,7 +124,7 @@ def _fetch_recent_comments(since_posts: int) -> list[dict]:
             if cid and msg:
                 out.append({
                     "id": cid,
-                    "from_id": frm.get("id"),
+                    "from_id": frm.get("id"),     # souvent None en mode Dev → OK
                     "message": msg,
                     "ts": ts,
                     "post_id": pid,
@@ -137,7 +137,7 @@ def _fetch_recent_comments(since_posts: int) -> list[dict]:
 # ──────────────────────────────────────────────
 async def _traiter_commentaire(c: dict) -> None:
     cid = c["id"]
-    sender = c["from_id"] or ""
+    sender = c["from_id"] or ""        # "" si auteur anonyme (mode Dev)
     texte = c["message"]
     post_id = c.get("post_id", "")
     t0 = time.time()
@@ -189,30 +189,25 @@ async def _cycle() -> None:
     if not _booted:
         _booted = True
         _last_ts = cycle_start
-        _log(f"démarrage — {len(comments)} commentaire(s) vus, curseur = maintenant ({_fmt(_last_ts)})")
+        _log(f"démarrage — {len(comments)} commentaire(s) vus, curseur={_fmt(_last_ts)} (aucun spam du passé)")
         return
 
-    # ── DEBUG : ce que l'API nous renvoie ce cycle ──
-    ts_max = max((c["ts"] for c in comments), default=0.0)
-    _log(f"🔍 DEBUG cycle : {len(comments)} brut(s) | ts_max={_fmt(ts_max)} | curseur={_fmt(_last_ts)}")
-    for c in comments[:3]:
-        _log(f"     ↳ id={c['id'][:18]}… from={c['from_id']} ts={_fmt(c['ts'])} « {c['message'][:35]} »")
-
+    # ← LE FIX : on n'exige PLUS from_id. On écarte seulement si from EST la Page.
+    #    (from=None → None != FB_PAGE_ID → True → on traite.)
     nouveaux = [
         c for c in comments
         if c["ts"] > _last_ts
         and c["id"] not in _seen
-        and c["from_id"]
         and c["from_id"] != FB_PAGE_ID
     ]
 
-    if nouveaux:
-        _log(f"{len(nouveaux)} nouveau(x) commentaire(s) à traiter")
-    elif comments:
-        # ── DEBUG : pourquoi TOUT est filtré ──
-        _log(f"🔍 DEBUG filtrage : 0 nouveau sur {len(comments)} brut(s). Raisons (3 premiers) :")
-        for c in comments[:3]:
-            _log(f"     ✖ {c['id'][:18]}… → {' | '.join(_raisons(c))}")
+    _log(f"🔍 cycle : {len(comments)} brut, {len(nouveaux)} nouveau(x), curseur={_fmt(_last_ts)}")
+
+    # DEBUG ciblé : ne s'affiche QUE si un commentaire récent n'a pas été pris
+    if not nouveaux:
+        recents = [c for c in comments if c["ts"] > _last_ts and c["id"] not in _seen]
+        for c in recents[:3]:
+            _log(f"   ⚠️ récent non traité {c['id'][:15]}… → {' | '.join(_raisons(c))}")
 
     for c in nouveaux:
         cid = c["id"]
