@@ -1,0 +1,22 @@
+name: NB — Polling backup
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"  # Toutes les 10 minutes
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: Vérifier les manqués
+        env:
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          BOT_NAME: NB
+        run: python polling/check_missed.py
