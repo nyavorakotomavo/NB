@@ -2,33 +2,19 @@
 """
 NB — Polling des commentaires (Option A : Railway, 30 s, tâche de fond).
 
-Contourne le blocage du webhook en mode Dev : au lieu d'attendre que Facebook
-pousse les événements, NB va LIRE le feed de la Page (action admin standard,
-autorisée pour TOUS les commentateurs, sans review ni testeur).
+Contourne le blocage du webhook en mode Dev : NB va LIRE le feed de la Page
+(action admin standard, OK pour TOUS les commentateurs, sans review ni testeur).
 
-IMPORTANT : ce poller NE RÉÉCRIT PAS la logique IA. Il réutilise le cerveau du
-serveur (bot.ai_responder / language_detector / intent_analyzer / fb_client /
-conversation_store). Webhook et polling partagent donc le même NB, le même
-historique, les mêmes analytics, et le même filtre anti-spam.
+Le poller NE RÉÉCRIT PAS la logique IA : il réutilise le cerveau du serveur
+(ai_responder / language_detector / intent_analyzer / fb_client / conversation_store).
 
-Cycle toutes les 30 s :
-  1. GET /{page}/posts?fields=comments{...}   (fenêtre 7 j)
-  2. Filtre anti-boucle : on ignore from.id == FB_PAGE_ID
-  3. Filtre nouveauté  : created_time > last_ts  +  dédup par id (mémoire)
-  4. Cerveau du bot    : langue → intention (spam ignoré) → réponse IA → envoi
-  5. Marquage "vu"     + analytics Supabase
-
-Sécurité :
-  - asyncio.Lock  → 1 seul cycle à la fois (pas de chevauchement à 30 s)
-  - since = MAINTENANT au 1er lancement → JAMAIS de spam du passé
-  - compteur d'échecs par id → 3 ratés = abandon (pas de spam de logs)
-  - TOUT est try/excepté → le poller ne peut JAMAIS tuer uvicorn
-  - aucune table Supabase à créer (déjà géré par conversation_store)
+⚠️ MODE DEBUG ACTIF : logs verbeux temporaires pour diagnostiquer pourquoi les
+   nouveaux commentaires sont filtrés. À retirer une fois le bug identifié.
 """
 
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -55,9 +41,9 @@ TIMEOUT = 30
 # État (mémoire ; réinitialisé à chaque (re)démarrage)
 # ──────────────────────────────────────────────
 _lock = asyncio.Lock()
-_seen: set[str] = set()        # comment_id déjà traités cette session
-_fail: dict[str, int] = {}     # comment_id -> nb échecs consécutifs
-_last_ts: float = time.time()  # horizon "nouveauté" (epoch)
+_seen: set[str] = set()
+_fail: dict[str, int] = {}
+_last_ts: float = time.time()
 _booted: bool = False
 
 
@@ -66,17 +52,54 @@ def _log(msg: str) -> None:
 
 
 def _parse_ts(iso: str) -> float:
+    """Parse un created_time Facebook, robuste aux variantes de fuseau (Z, +0000, +00:00)."""
+    if not iso:
+        return 0.0
+    s = iso.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    # fuseau sans deux-points ex: +0000 -> +00:00
+    if len(s) >= 5 and s[-5] in "+-" and s[-3] != ":":
+        s = s[:-2] + ":" + s[-2:]
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            continue
+    # ultime recours : fromisoformat (3.11+)
     try:
-        return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%S%z").timestamp()
+        return datetime.fromisoformat(s).timestamp()
     except Exception:
         return 0.0
 
 
+def _fmt(ts: float) -> str:
+    try:
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M:%S")
+    except Exception:
+        return "?"
+
+
+def _raisons(c: dict) -> list[str]:
+    r = []
+    if c["ts"] <= _last_ts:
+        r.append(f"trop vieux (ts {_fmt(c['ts'])} <= curseur {_fmt(_last_ts)})")
+    if c["id"] in _seen:
+        r.append("déjà vu")
+    if not c["from_id"]:
+        r.append("from vide")
+    elif c["from_id"] == FB_PAGE_ID:
+        r.append("c'est la Page")
+    return r or ["? (raison inconnue)"]
+
+
 # ──────────────────────────────────────────────
-# Facebook Graph — lecture brute (requests synchrone → to_thread)
+# Facebook Graph — lecture brute
 # ──────────────────────────────────────────────
 def _fetch_recent_comments(since_posts: int) -> list[dict]:
-    """Commentaires de 1er niveau sur les posts de la fenêtre."""
     fields = "created_time,comments.limit(30){id,from,message,created_time}"
     url = f"https://graph.facebook.com/{GRAPH_VERSION}/{FB_PAGE_ID}/posts"
     r = requests.get(
@@ -119,24 +142,19 @@ async def _traiter_commentaire(c: dict) -> None:
     post_id = c.get("post_id", "")
     t0 = time.time()
 
-    # Analyse (cerveau du bot)
     langue = detecter_langue(texte)
     intention = analyser_intention(texte)
 
-    # Anti-spam (identique au webhook)
     if intention == "spam":
         _log(f"🚮 spam ignoré {cid[:12]}…")
         _seen.add(cid)
         return
 
-    # Contexte du post + historique (pour une réponse cohérente)
     contexte = await get_post_message(post_id) if post_id else ""
     historique = get_historique(sender, "comment")
 
-    # On mémorise le message entrant
     sauvegarder_message(sender, "comment", "user", texte, langue, post_id)
 
-    # Réponse IA (Mistral FR/EN → Gemini MG/fallback, avec historique)
     reponse = await generer_reponse(
         message=texte,
         langue=langue,
@@ -145,10 +163,8 @@ async def _traiter_commentaire(c: dict) -> None:
         historique=historique,
     )
 
-    # Envoi sous le commentaire (au nom de la Page)
     await repondre_commentaire(cid, reponse)
 
-    # On mémorise la réponse + analytics
     sauvegarder_message(sender, "comment", "bot", reponse, langue, post_id)
     temps = time.time() - t0
     log_interaction(sender, "commentaire", langue, intention, temps, post_id)
@@ -164,30 +180,39 @@ async def _cycle() -> None:
     cycle_start = time.time()
     since_posts = int(cycle_start - WINDOW_SECONDS)
 
-    # Lecture (synchrone → ne bloque pas la boucle asyncio du serveur)
     try:
         comments = await asyncio.to_thread(_fetch_recent_comments, since_posts)
     except Exception as e:
         _log(f"lecture feed échec : {e}")
         return
 
-    # 1er lancement : on cale le curseur à MAINTENANT (aucun spam du passé)
     if not _booted:
         _booted = True
         _last_ts = cycle_start
-        _log(f"démarrage — {len(comments)} commentaire(s) vus, curseur = maintenant")
+        _log(f"démarrage — {len(comments)} commentaire(s) vus, curseur = maintenant ({_fmt(_last_ts)})")
         return
 
-    # Nouveautés : récents + pas encore vus + pas nous-mêmes
+    # ── DEBUG : ce que l'API nous renvoie ce cycle ──
+    ts_max = max((c["ts"] for c in comments), default=0.0)
+    _log(f"🔍 DEBUG cycle : {len(comments)} brut(s) | ts_max={_fmt(ts_max)} | curseur={_fmt(_last_ts)}")
+    for c in comments[:3]:
+        _log(f"     ↳ id={c['id'][:18]}… from={c['from_id']} ts={_fmt(c['ts'])} « {c['message'][:35]} »")
+
     nouveaux = [
         c for c in comments
         if c["ts"] > _last_ts
         and c["id"] not in _seen
         and c["from_id"]
-        and c["from_id"] != FB_PAGE_ID     # ← anti-boucle-infinie
+        and c["from_id"] != FB_PAGE_ID
     ]
+
     if nouveaux:
         _log(f"{len(nouveaux)} nouveau(x) commentaire(s) à traiter")
+    elif comments:
+        # ── DEBUG : pourquoi TOUT est filtré ──
+        _log(f"🔍 DEBUG filtrage : 0 nouveau sur {len(comments)} brut(s). Raisons (3 premiers) :")
+        for c in comments[:3]:
+            _log(f"     ✖ {c['id'][:18]}… → {' | '.join(_raisons(c))}")
 
     for c in nouveaux:
         cid = c["id"]
@@ -200,10 +225,10 @@ async def _cycle() -> None:
             _fail[cid] = n
             _log(f"⚠️ échec {cid[:12]}… ({n}/{MAX_FAIL_PER_COMMENT}) : {e}")
             if n >= MAX_FAIL_PER_COMMENT:
-                _seen.add(cid)               # on abandonne ce commentaire
+                _seen.add(cid)
                 _log(f"🚫 {cid[:12]}… abandonné après {n} échecs")
 
-    _last_ts = cycle_start                   # curseur = début de ce cycle
+    _last_ts = cycle_start
 
 
 # ──────────────────────────────────────────────
@@ -213,7 +238,7 @@ async def start_polling() -> None:
     _log(f"tâche de fond démarrée — intervalle {INTERVAL}s, page {FB_PAGE_ID}")
     while True:
         try:
-            async with _lock:                # 1 cycle à la fois
+            async with _lock:
                 await _cycle()
         except asyncio.CancelledError:
             _log("tâche annulée — arrêt")
