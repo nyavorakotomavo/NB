@@ -1,4 +1,4 @@
-"""
+""" 
 NB — Serveur FastAPI (webhook Facebook).
 Reçoit les événements Facebook et répond en temps réel.
 
