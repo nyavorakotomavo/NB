@@ -6,7 +6,11 @@ Reçoit les événements Facebook et répond en temps réel.
   - Messages Messenger
   - Commentaires sur les posts
   - Réactions sur les posts
+
++ Polling des commentaires en tâche de fond (30 s) : contournement du blocage
+  webhook en mode Dev (lire le feed = action admin, OK pour tout le monde).
 """
+import asyncio
 import time
 
 from fastapi import FastAPI, Request, Response
@@ -244,6 +248,20 @@ async def _gerer_reaction(value: dict) -> None:
 @app.get("/")
 async def health():
     return {"status": "ok", "bot": BOT_NAME, "version": "1.0"}
+
+
+# ──────────────────────────────────────────────
+# Démarrage du polling (tâche de fond, 30 s)
+# ──────────────────────────────────────────────
+# Import paresseux + try/except : si poller.py avait le moindre souci,
+# le serveur démarre QUAND MÊME et continue de servir / et /webhook.
+@app.on_event("startup")
+async def _start_nb_polling():
+    try:
+        from bot import poller
+        asyncio.create_task(poller.start_polling())
+    except Exception as _e:
+        print(f"⚠️ Polling non démarré (le serveur continue) : {_e}")
 
 
 # ──────────────────────────────────────────────
