@@ -1,16 +1,15 @@
 """
 NB — Serveur FastAPI (webhook Facebook).
 Reçoit les événements Facebook et répond en temps réel.
+Personnalité : Geek + Mentor (Nyavodroid).
 
 Événements gérés :
   - Messages Messenger
   - Commentaires sur les posts
   - Réactions sur les posts
 
-+ Polling des commentaires en tâche de fond (30 s) : contournement du blocage
-  webhook en mode Dev (lire le feed = action admin, OK pour tout le monde).
+100% webhook (pas de polling).
 """
-import asyncio
 import time
 
 from fastapi import FastAPI, Request, Response
@@ -19,8 +18,7 @@ from fastapi.responses import PlainTextResponse
 from bot.config import FB_VERIFY_TOKEN, BOT_NAME
 from bot.fb_client import (
     verifier_signature,
-    repondre_message,
-    repondre_commentaire,
+    envoyer_message_humain,
     commenter_post,
     get_post_message,
 )
@@ -33,7 +31,7 @@ from bot.conversation_store import (
     log_interaction,
 )
 
-app = FastAPI(title=f"{BOT_NAME} — Nyavo Bot")
+app = FastAPI(title=f"{BOT_NAME} — Nyavodroid Bot")
 
 # Cache pour éviter de répondre plusieurs fois aux réactions d'un même post
 _reactions_traitees: set[str] = set()
@@ -125,8 +123,8 @@ async def _gerer_message(messaging: dict) -> None:
         historique=historique,
     )
 
-    # Envoyer
-    await repondre_message(sender_id, reponse)
+    # Envoyer avec délai humain (Message Splitting)
+    await envoyer_message_humain(sender_id, reponse, type_envoi="message")
 
     # Sauvegarder la réponse
     sauvegarder_message(sender_id, "messenger", "bot", reponse, langue)
@@ -183,8 +181,8 @@ async def _gerer_commentaire(value: dict) -> None:
         historique=historique,
     )
 
-    # Envoyer
-    await repondre_commentaire(comment_id, reponse)
+    # Envoyer avec délai humain (Message Splitting)
+    await envoyer_message_humain(comment_id, reponse, type_envoi="commentaire")
 
     # Sauvegarder
     sauvegarder_message(sender_id, "comment", "bot", reponse, langue, post_id)
@@ -196,13 +194,13 @@ async def _gerer_commentaire(value: dict) -> None:
     print(f"  🗨️  Commentaire [{langue}/{intention}] → {reponse[:60]}... ({temps:.1f}s)")
 
 
-# ──────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # Gestion des réactions
 # ──────────────────────────────────────────────
 async def _gerer_reaction(value: dict) -> None:
     """
     Traite une réaction sur un post.
-    Poste un remerciement général (une seule fois par post).
+    Poste un remerciement naturel (une seule fois par post).
     """
     verb = value.get("verb", "")
     if verb != "add":
@@ -219,7 +217,7 @@ async def _gerer_reaction(value: dict) -> None:
         return
     _reactions_traitees.add(post_id)
 
-    # Message de remerciement selon la réaction
+    # Messages de remerciement plus naturels et variés
     remerciements = {
         "like": "Merci pour le soutien ! Ça fait plaisir de voir que le contenu tech vous parle 🙏",
         "love": "Wow, merci pour tout cet amour ! Vous êtes la meilleure communauté tech 🤖❤️",
@@ -227,7 +225,7 @@ async def _gerer_reaction(value: dict) -> None:
         "wow": "Merci ! La tech n'a pas fini de nous surprendre 🤯🔬",
         "sad": "Merci pour votre soutien 💙 On traverse ça ensemble.",
         "angry": "Merci pour votre retour. On s'améliore chaque jour 🙏",
-        "care": "Merci pour votre bienveillance ! La communauté Nyavo est forte 🤝💚",
+        "care": "Merci pour votre bienveillance ! La communauté Nyavodroid est forte 🤝💚",
     }
     texte = remerciements.get(
         reaction_type,
@@ -248,20 +246,6 @@ async def _gerer_reaction(value: dict) -> None:
 @app.get("/")
 async def health():
     return {"status": "ok", "bot": BOT_NAME, "version": "1.0"}
-
-
-# ──────────────────────────────────────────────
-# Démarrage du polling (tâche de fond, 30 s)
-# ──────────────────────────────────────────────
-# Import paresseux + try/except : si poller.py avait le moindre souci,
-# le serveur démarre QUAND MÊME et continue de servir / et /webhook.
-@app.on_event("startup")
-async def _start_nb_polling():
-    try:
-        from bot import poller
-        asyncio.create_task(poller.start_polling())
-    except Exception as _e:
-        print(f"⚠️ Polling non démarré (le serveur continue) : {_e}")
 
 
 # ──────────────────────────────────────────────
