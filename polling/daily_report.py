@@ -10,6 +10,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bot.analytics import rapport_quotidien
 
+# === AJOUT : Vérification pour GitHub Actions (ne supprime rien) ===
+from bot.config import SUPABASE_URL, SUPABASE_KEY
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("❌ Variables Supabase manquantes. Arrêt du rapport.")
+    sys.exit(0)
+
 
 def main() -> None:
     print(rapport_quotidien())
