@@ -84,5 +84,17 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
         else:
             for i, phrase in enumerate(phrases):
                 if not phrase.strip(): continue
-                if i > 0: await asyncio.sleep(random.uniform(1.0, 2.0))
+                
+                # Envoi normal
                 await repondre_message(sender_id, phrase.strip())
+                
+                # === AJOUT : Délai VARIABLE entre chaque bulle (1.5s à 4.5s) ===
+                if i < len(phrases) - 1:
+                    # Délai de base
+                    attente = random.uniform(1.5, 4.5)
+                    
+                    # Pause plus longue tous les 3 messages (simule la réflexion)
+                    if (i + 1) % 3 == 0:
+                        attente += random.uniform(3.0, 7.0)
+                    
+                    await asyncio.sleep(attente)
