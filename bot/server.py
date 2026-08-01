@@ -68,10 +68,24 @@ async def handle_webhook(request: Request):
 
     data = await request.json()
 
+    # === AJOUT : Compteur pour les pauses café ===
+    compteur_utilisateurs = 0
+    import asyncio
+    import random
+
     for entry in data.get("entry", []):
         # ── Messages Messenger ──
         for messaging in entry.get("messaging", []):
             await _gerer_message(messaging)
+            compteur_utilisateurs += 1
+            
+            # === AJOUT : Délai entre chaque utilisateur (5-10s) ===
+            # (simule le temps de lire et répondre à chaque personne)
+            await asyncio.sleep(random.uniform(5.0, 10.0))
+            
+            # === AJOUT : Pause café toutes les 5 réponses ===
+            if compteur_utilisateurs % 5 == 0:
+                await asyncio.sleep(random.uniform(8.0, 15.0))
 
         # ── Feed (commentaires + réactions) ──
         for change in entry.get("changes", []):
@@ -80,14 +94,19 @@ async def handle_webhook(request: Request):
 
             if item == "comment":
                 await _gerer_commentaire(value)
+                compteur_utilisateurs += 1
+                
+                # === AJOUT : Délai entre chaque commentaire ===
+                await asyncio.sleep(random.uniform(5.0, 10.0))
+                
+                if compteur_utilisateurs % 5 == 0:
+                    await asyncio.sleep(random.uniform(8.0, 15.0))
+                    
             elif item == "reaction":
                 await _gerer_reaction(value)
 
     # Facebook attend un 200 rapide
-    return {"status": "ok"}
-
-
-# ──────────────────────────────────────────────
+    return {"status": "ok"} ──────────────────────────────────────────────
 # Gestion des messages Messenger
 # ──────────────────────────────────────────────
 async def _gerer_message(messaging: dict) -> None:
