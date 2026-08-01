@@ -1,21 +1,32 @@
-name: NB — Rapport quotidien
+name: Daily Report
 
 on:
   schedule:
-    - cron: "0 23 * * *"  # 23h UTC (02h Madagascar)
-  workflow_dispatch: {}
+    - cron: '0 20 * * *'
+  workflow_dispatch:
 
 jobs:
   report:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v3
+      
+      - uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
-      - run: pip install -r requirements.txt
-      - name: Générer le rapport
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        
+      - name: Run daily report
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          FB_APP_SECRET: ${{ secrets.FB_APP_SECRET }}
+          FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_VERIFY_TOKEN: ${{ secrets.FB_VERIFY_TOKEN }}
+          GEMINI_APP_KEY_BOT: ${{ secrets.GEMINI_APP_KEY_BOT }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          PORT: ${{ secrets.PORT }}
         run: python polling/daily_report.py
