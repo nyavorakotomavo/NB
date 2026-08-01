@@ -14,6 +14,7 @@ def _clean(value: str) -> str:
 
 
 # ─── Facebook ──────────────────────────────────
+# === MODIFICATION : os.environ["..."] → os.environ.get("...", "") ===
 FB_PAGE_ID = _clean(os.environ.get("FB_PAGE_ID", ""))
 FB_PAGE_ACCESS_TOKEN = _clean(os.environ.get("FB_PAGE_ACCESS_TOKEN", ""))
 FB_VERIFY_TOKEN = _clean(os.environ.get("FB_VERIFY_TOKEN", ""))
@@ -21,9 +22,8 @@ FB_APP_SECRET = _clean(os.environ.get("FB_APP_SECRET", ""))
 
 # ─── IA ────────────────────────────────────────
 MISTRAL_API_KEY = _clean(os.environ.get("MISTRAL_API_KEY", ""))
-# Note : le nom exact dans Railway est GEMINI_APP_KEY_BOT
 GEMINI_API_KEY = _clean(os.environ.get("GEMINI_APP_KEY_BOT", ""))
-# Fallback si le nom est différent
+# === AJOUT : Fallback si le nom est différent (ne supprime rien) ===
 if not GEMINI_API_KEY:
     GEMINI_API_KEY = _clean(os.environ.get("GEMINI_API_KEY_BOT", ""))
 
@@ -46,6 +46,6 @@ MAX_HISTORY_TURNS = 10  # nombre de tours conservés par utilisateur
 # ─── Graph API ─────────────────────────────────
 GRAPH_VERSION = "v26.0"
 
-# ─── Vérification pour GitHub Actions ─────────
+# === AJOUT : Log pour GitHub Actions (ne supprime rien) ===
 if not FB_PAGE_ID:
     print("⚠️  Mode GitHub Actions : variables non chargées (mode dégradé)")
