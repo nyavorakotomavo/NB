@@ -46,4 +46,4 @@ GRAPH_VERSION = "v26.0"
 
 # ─── Vérification pour GitHub Actions ─────────
 if not FB_PAGE_ID:
-    print("⚠️  Mode GitHub Actions : variables non chargées (mode dégradé)")
+    print("⚠️  Mode GitHub Actions : variables non chargées (mode dégradé)") 
