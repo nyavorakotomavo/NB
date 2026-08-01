@@ -51,6 +51,12 @@ async def generer_reponse(message: str, langue: str, intention: str, contexte_po
     if historique is None: historique = []
     prompt = _prompt_reponse(message, langue, intention, contexte_post, historique)
 
+    # === AJOUT : Simule le temps de "réflexion" avant de taper ===
+    # (l'humain réfléchit 1-3 secondes avant de commencer à répondre)
+    import asyncio
+    import random
+    await asyncio.sleep(random.uniform(1.0, 3.0))
+
     # Mistral
     if MISTRAL_API_KEY:
         try:
