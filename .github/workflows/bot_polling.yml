@@ -2,8 +2,8 @@ name: Bot Polling
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
-  workflow_dispatch:
+    - cron: '*/10 * * * *'  # Toutes les 10 minutes
+  workflow_dispatch:  # Permet de lancer manuellement
 
 jobs:
   poll:
@@ -27,6 +27,6 @@ jobs:
           GEMINI_APP_KEY_BOT: ${{ secrets.GEMINI_APP_KEY_BOT }}
           MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_URL: "https://efchirndbidiyzwezkgt.supabase.co"
           PORT: ${{ secrets.PORT }}
         run: python polling/check_missed.py
