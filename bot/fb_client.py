@@ -1,6 +1,6 @@
 """
 NB — Client Facebook Graph API.
-Envoi de réponses avec délai humain (Message Splitting).
+Envoi de réponses avec délai humain (Message Splitting pour Messenger uniquement).
 """
 import asyncio
 import hashlib
@@ -43,7 +43,7 @@ async def repondre_message(sender_id: str, texte: str) -> None:
 
 
 async def repondre_commentaire(comment_id: str, texte: str) -> None:
-    """Répond à un commentaire sur un post."""
+    """Répond à un commentaire sur un post (EN UN SEUL BLOC)."""
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{BASE}/{comment_id}/comments",
@@ -105,17 +105,20 @@ async def get_derniers_posts() -> list[dict]:
 async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "message") -> None:
     """
     Découpe le texte en phrases et les envoie avec un délai naturel.
-    type_envoi: "message" (Messenger) ou "commentaire" (réponse à un commentaire)
+    ATTENTION : Ne s'applique QU'AU MESSENGER. 
+    Pour les commentaires, on envoie tout en une fois pour éviter les réponses imbriquées Facebook.
     """
-    # Découper par phrases (point, point d'exclamation, point d'interrogation)
+    # 1. Si c'est un commentaire, on envoie TOUT d'un coup (sécurité Facebook)
+    if type_envoi == "commentaire":
+        await repondre_commentaire(sender_id, texte)
+        return
+
+    # 2. Si c'est un message Messenger, on fait le découpage humain
     phrases = re.split(r'(?<=[.!?]) +', texte.strip())
     
     # Si une seule phrase ou texte trop court, envoi direct
     if len(phrases) <= 1:
-        if type_envoi == "message":
-            await repondre_message(sender_id, texte)
-        else:
-            await repondre_commentaire(sender_id, texte)
+        await repondre_message(sender_id, texte)
         return
 
     # Envoyer les phrases une par une avec délai
@@ -123,7 +126,7 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
         if not phrase.strip():
             continue
         
-        # Délai aléatoire entre 1 et 3 secondes (simule la frappe)
+        # Délai aléatoire entre 1 et 2.5 secondes (simule la frappe)
         delai = random.uniform(1.0, 2.5)
         
         # Pas de délai avant le premier message
@@ -131,7 +134,4 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
             await asyncio.sleep(delai)
         
         # Envoyer la phrase
-        if type_envoi == "message":
-            await repondre_message(sender_id, phrase.strip())
-        else:
-            await repondre_commentaire(sender_id, phrase.strip())
+        await repondre_message(sender_id, phrase.strip())
