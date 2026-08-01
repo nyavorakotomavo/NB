@@ -9,10 +9,16 @@ import time
 
 import requests
 
-FB_PAGE_ID = os.environ["FB_PAGE_ID"]
-FB_TOKEN = os.environ["FB_PAGE_ACCESS_TOKEN"]
+# === MODIFICATION UNIQUE : os.environ["..."] → os.environ.get("...", "") ===
+FB_PAGE_ID = os.environ.get("FB_PAGE_ID", "")
+FB_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN", "")
 GRAPH = "v25.0"
 BASE = f"https://graph.facebook.com/{GRAPH}"
+
+# === AJOUT : Vérification pour GitHub Actions (ne supprime rien) ===
+if not FB_PAGE_ID or not FB_TOKEN:
+    print("❌ Variables Facebook manquantes. Arrêt du polling.")
+    sys.exit(0)
 
 
 def get_conversations_sans_reponse() -> list[dict]:
