@@ -9,13 +9,12 @@ import time
 
 import requests
 
-# === MODIFICATION UNIQUE : os.environ["..."] → os.environ.get("...", "") ===
 FB_PAGE_ID = os.environ.get("FB_PAGE_ID", "")
 FB_TOKEN = os.environ.get("FB_PAGE_ACCESS_TOKEN", "")
 GRAPH = "v25.0"
 BASE = f"https://graph.facebook.com/{GRAPH}"
 
-# === AJOUT : Vérification pour GitHub Actions (ne supprime rien) ===
+# === VÉRIFICATION : Si pas de variables, on sort silencieusement ===
 if not FB_PAGE_ID or not FB_TOKEN:
     print("❌ Variables Facebook manquantes. Arrêt du polling.")
     sys.exit(0)
