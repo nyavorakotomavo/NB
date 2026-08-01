@@ -1,9 +1,12 @@
 """
 NB — Client Facebook Graph API.
-Envoi de réponses (Messenger, commentaires, réactions).
+Envoi de réponses avec délai humain (Message Splitting).
 """
+import asyncio
 import hashlib
 import hmac
+import random
+import re
 
 import httpx
 
@@ -94,3 +97,41 @@ async def get_derniers_posts() -> list[dict]:
             return resp.json().get("data", [])
     except Exception:
         return []
+
+
+# ──────────────────────────────────────────────
+# Message Splitting + Délai de frappe humain
+# ──────────────────────────────────────────────
+async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "message") -> None:
+    """
+    Découpe le texte en phrases et les envoie avec un délai naturel.
+    type_envoi: "message" (Messenger) ou "commentaire" (réponse à un commentaire)
+    """
+    # Découper par phrases (point, point d'exclamation, point d'interrogation)
+    phrases = re.split(r'(?<=[.!?]) +', texte.strip())
+    
+    # Si une seule phrase ou texte trop court, envoi direct
+    if len(phrases) <= 1:
+        if type_envoi == "message":
+            await repondre_message(sender_id, texte)
+        else:
+            await repondre_commentaire(sender_id, texte)
+        return
+
+    # Envoyer les phrases une par une avec délai
+    for i, phrase in enumerate(phrases):
+        if not phrase.strip():
+            continue
+        
+        # Délai aléatoire entre 1 et 3 secondes (simule la frappe)
+        delai = random.uniform(1.0, 2.5)
+        
+        # Pas de délai avant le premier message
+        if i > 0:
+            await asyncio.sleep(delai)
+        
+        # Envoyer la phrase
+        if type_envoi == "message":
+            await repondre_message(sender_id, phrase.strip())
+        else:
+            await repondre_commentaire(sender_id, phrase.strip())
