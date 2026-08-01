@@ -1,22 +1,32 @@
-name: NB — Polling backup
+name: Bot Polling
 
 on:
   schedule:
-    - cron: "*/10 * * * *"  # Toutes les 10 minutes
-  workflow_dispatch: {}
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
 
 jobs:
-  check:
+  poll:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v3
+      
+      - uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
-      - run: pip install requests
-      - name: Vérifier les manqués
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        
+      - name: Run polling
         env:
-          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_APP_SECRET: ${{ secrets.FB_APP_SECRET }}
           FB_PAGE_ACCESS_TOKEN: ${{ secrets.FB_PAGE_ACCESS_TOKEN }}
-          BOT_NAME: NB
+          FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
+          FB_VERIFY_TOKEN: ${{ secrets.FB_VERIFY_TOKEN }}
+          GEMINI_APP_KEY_BOT: ${{ secrets.GEMINI_APP_KEY_BOT }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          PORT: ${{ secrets.PORT }}
         run: python polling/check_missed.py
