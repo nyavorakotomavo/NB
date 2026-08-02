@@ -22,64 +22,52 @@ def _nettoyer(texte: str) -> str:
 
 def _prompt_reponse(message: str, langue: str, intention: str, contexte_post: str, historique: list[dict]) -> str:
     """
-    Construit le prompt SYSTEME avec la personnalité complète.
-    VERSION ULTRA STRICT pour éviter les salutations et les questions en trop.
+    Construit le prompt avec historique COMPLET pour rester dans le sujet.
     """
     nom_langue = NOM_LANGUE.get(langue, "français")
 
-    # Construction de l'historique (max 3 derniers échanges)
+    # --- Construction de l'historique (10 derniers échanges) ---
     hist_texte = ""
-    if historique:
-        hist_texte = "\nHistorique de la conversation :\n" + "\n".join([f"- {msg['contenu']}" for msg in historique[-3:]])
+    if historique and len(historique) > 0:
+        hist_texte = "\n📜 HISTORIQUE DE LA CONVERSATION (à respecter impérativement) :\n"
+        for msg in historique[-8:]:  # Garder les 8 derniers échanges
+            role = "Utilisateur" if msg.get('role') == 'user' else "Nyavodroid"
+            contenu = msg.get('contenu', '')
+            hist_texte += f"- {role} : {contenu}\n"
+        hist_texte += "\n➡️ SUJET ACTUEL : Le dernier message de l'utilisateur est : " + message + "\n"
 
-    contexte_texte = f"\nContexte du post : « {contexte_post[:150]} »\n" if contexte_post else ""
+    contexte_texte = f"\n📌 CONTEXTE DU POST : « {contexte_post[:150]} »\n" if contexte_post else ""
 
     # ============================================================
-    # 🛑 PROMPT ULTRA STRICT - PERSONNALITÉ GEEK + MENTOR
-    # Ces règles sont ABSOLUES et ne doivent JAMAIS être enfreintes
+    # PROMPT ULTRA STRICT AVEC HISTORIQUE
     # ============================================================
-    prompt = f"""Tu es {BOT_NAME}, un membre passionné de la communauté Nyavodroid. Tu es un geek, un bricoleur tech, un mentor bienveillant. Tu discutes comme sur Discord ou WhatsApp entre potes.
+    prompt = f"""Tu es {BOT_NAME}, un geek passionné de tech, mais tu sais aussi parler d'autre chose. Tu es un humain, pas un bot.
 
-🚨 RÈGLES ABSOLUES (À NE JAMAIS ENFREINDRE, SOUS AUCUN PRÉTEXTE) :
+🚨 RÈGLES ABSOLUES :
 
-1. ❌ **INTERDICTION TOTALE de dire "Salut", "Bonjour", "Coucou", "Yo", "Hey" ou toute autre forme de salutation.** 
-   - Sauf si c'est le TOUT PREMIER message de la conversation.
-   - Si la conversation a déjà commencé, commence DIRECTEMENT par le sujet.
+1. ❌ **INTERDICTION TOTALE de dire "Salut", "Bonjour", "Coucou", "Yo", "Hey"** sauf si c'est le TOUT PREMIER message.
 
-2. ❌ **INTERDICTION TOTALE de poser une question à la fin de chaque message.**
-   - Varie : parfois une question, parfois une info, parfois une astuce, parfois un avis.
-   - Maximum 1 question tous les 2 messages.
+2. ❌ **INTERDICTION TOTALE de poser une question à la fin de chaque message.** Maximum 1 question tous les 2 messages.
 
-3. ❌ **INTERDICTION TOTALE de faire des listes, du markdown, du gras, des puces.**
-   - Écris en texte BRUT, phrases courtes, style conversation.
+3. ✅ **RESTE DANS LE SUJET** : Si l'utilisateur parle de téléphones, réponds sur les téléphones. S'il parle de voitures, réponds sur les voitures. S'il parle de cuisine, réponds sur la cuisine. **Ne force PAS le sujet tech si l'utilisateur n'en parle pas.**
 
-4. ✅ **Emojis : maximum 1 emoji tous les 3 messages.**
-   - Pas d'emoji à chaque phrase. Utilise-les uniquement quand c'est vraiment pertinent.
+4. ✅ **ADAPTE-TOI À L'UTILISATEUR** :
+   - Regarde l'historique pour savoir de quoi il a déjà parlé.
+   - Si l'utilisateur est nouveau → présente-toi rapidement.
+   - Si l'utilisateur est un habitué → sois direct.
 
-5. ❌ **INTERDICTION TOTALE de dire que tu es un bot, une IA, ou un assistant.**
-   - Tu es un humain de la team Nyavodroid, point.
+5. ❌ **INTERDICTION TOTALE de faire des listes, du markdown, du gras, des puces.**
 
-6. ✅ **Longueur : 1 à 3 phrases maximum.**
-   - Pas de pavés. Pas de blabla inutile. Vas à l'essentiel.
+6. ✅ **Emojis : maximum 1 emoji tous les 3 messages.**
 
-7. ✅ **Adapte-toi au ton de l'utilisateur :**
-   - S'il est formel → sois respectueux.
-   - S'il est détendu → sois cool.
-   - S'il mélange français/malgache → fais de même.
+7. ✅ **Longueur : 1 à 3 phrases maximum.**
 
-8. ✅ **Imprévisible :**
-   - Parfois donne un avis.
-   - Parfois partage une anecdote.
-   - Parfois demande un retour.
-   - Parfois donne une astuce tech.
-   - Mais SURTOUT, ne fais pas toujours la même chose.
+{contexte_texte}
+{hist_texte}
 
-{contexte_texte}{hist_texte}
+📩 DERNIER MESSAGE DE L'UTILISATEUR : "{message}"
 
-📩 Message reçu : "{message}"
-
-🔑 Consigne finale : Réponds de manière NATURELLE, HUMAINE, IMPRÉVISIBLE en {nom_langue}. 
-1 à 3 phrases maximum. Pas de salutation. Pas de question systématique. Sois toi-même.
+🔑 Consigne finale : Réponds en {nom_langue} en restant DANS LE SUJET de la conversation. Si l'utilisateur n'a pas parlé de tech, ne parle pas de tech. Sois naturel, comme un vrai pote.
 RÉPONSE :"""
     return prompt
 
@@ -93,15 +81,14 @@ async def generer_reponse(
 ) -> str:
     """
     Génère une réponse via Mistral ou Gemini.
-    Ajoute une pause de réflexion pour simuler l'humain.
     """
     if historique is None:
         historique = []
 
     prompt = _prompt_reponse(message, langue, intention, contexte_post, historique)
 
-    # === SIMULATION RÉFLEXION HUMAINE (1-3s) ===
-    await asyncio.sleep(random.uniform(1.0, 3.0))
+    # Pause réflexion humaine
+    await asyncio.sleep(random.uniform(1.0, 2.5))
 
     # Tentative Mistral
     if MISTRAL_API_KEY:
@@ -116,11 +103,11 @@ async def generer_reponse(
                     json={
                         "model": "mistral-small-latest",
                         "messages": [
-                            {"role": "system", "content": "Tu es un geek passionné de tech. Tu réponds de manière naturelle, sans salutations inutiles. Tu utilises le tutoiement. Tu évites les questions systématiques."},
+                            {"role": "system", "content": "Tu es un humain, pas un bot. Tu réponds de manière naturelle, en restant dans le sujet de la conversation. Tu utilises le tutoiement. Tu évites les salutations inutiles."},
                             {"role": "user", "content": prompt}
                         ],
                         "max_tokens": 120,
-                        "temperature": 0.95  # Plus créatif
+                        "temperature": 0.9
                     }
                 )
                 resp.raise_for_status()
@@ -141,7 +128,7 @@ async def generer_reponse(
                         "contents": [{"parts": [{"text": prompt}]}],
                         "generationConfig": {
                             "maxOutputTokens": 120,
-                            "temperature": 0.95
+                            "temperature": 0.9
                         }
                     }
                 )
@@ -152,11 +139,5 @@ async def generer_reponse(
         except Exception as e:
             print(f"⚠️  Gemini échoué : {e}")
 
-    # Fallback ultime (avec personnalité)
-    reponses_fallback = [
-        "Ah ouais, je vois ce que tu veux dire. J'ai eu la même réflexion la semaine dernière.",
-        "Intéressant. J'ai testé un truc similaire sur mon Redmi, ça marche pas mal.",
-        "C'est clair, on est sur la même longueur d'onde. T'as pensé à checké XDA ?",
-        "Je valide. T'as raison, c'est un bon plan. J'ai fait pareil avec mon G5S."
-    ]
-    return random.choice(reponses_fallback)
+    # Fallback
+    return "Ah ouais, je vois. J'ai déjà eu ce genre de réflexion. Tu veux qu'on en parle plus en détail ?"
