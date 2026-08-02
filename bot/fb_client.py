@@ -21,23 +21,49 @@ async def _envoyer_action_frappe(sender_id: str) -> None:
     """Active l'indicateur 'est en train d'écrire...' sur Messenger."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(f"{BASE}/me/messages", params={"access_token": FB_PAGE_ACCESS_TOKEN}, json={"recipient": {"id": sender_id}, "sender_action": "typing_on"})
+            resp = await client.post(
+                f"{BASE}/me/messages",
+                params={"access_token": FB_PAGE_ACCESS_TOKEN},
+                json={"recipient": {"id": sender_id}, "sender_action": "typing_on"}
+            )
+            print(f"✏️  Action frappe envoyée à {sender_id}: {resp.status_code}")
     except Exception as e:
         print(f"⚠️  Erreur action frappe : {e}")
 
 async def repondre_message(sender_id: str, texte: str) -> None:
+    """Envoie un message privé Messenger."""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            await client.post(f"{BASE}/me/messages", params={"access_token": FB_PAGE_ACCESS_TOKEN}, json={"recipient": {"id": sender_id}, "message": {"text": texte}})
+            payload = {
+                "recipient": {"id": sender_id},
+                "message": {"text": texte}
+            }
+            print(f"📤 Envoi à {sender_id}: {texte[:30]}...")
+            resp = await client.post(
+                f"{BASE}/me/messages",
+                params={"access_token": FB_PAGE_ACCESS_TOKEN},
+                json=payload
+            )
+            print(f"📥 Réponse Facebook: {resp.status_code} - {resp.text[:200]}")
+            resp.raise_for_status()
+            print(f"✅ Message envoyé à {sender_id}")
     except Exception as e:
-        print(f"⚠️  Erreur envoi message : {e}")
+        print(f"❌ Erreur envoi message : {e}")
 
 async def repondre_commentaire(comment_id: str, texte: str) -> None:
+    """Répond à un commentaire."""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            await client.post(f"{BASE}/{comment_id}/comments", params={"access_token": FB_PAGE_ACCESS_TOKEN}, json={"message": texte})
+            resp = await client.post(
+                f"{BASE}/{comment_id}/comments",
+                params={"access_token": FB_PAGE_ACCESS_TOKEN},
+                json={"message": texte}
+            )
+            print(f"📥 Réponse commentaire: {resp.status_code} - {resp.text[:200]}")
+            resp.raise_for_status()
+            print(f"✅ Commentaire envoyé à {comment_id}")
     except Exception as e:
-        print(f"⚠️  Erreur envoi commentaire : {e}")
+        print(f"❌ Erreur envoi commentaire : {e}")
 
 async def commenter_post(post_id: str, texte: str) -> None:
     try:
@@ -77,6 +103,8 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
     2. Indicateur de frappe ("...") pour Messenger
     3. Envoi (en un bloc pour commentaire, ou découpé pour Messenger)
     """
+    print(f"📨 envoyer_message_humain({sender_id}, type={type_envoi})")
+
     # 1. Délai de lecture réaliste (l'humain lit la notif avant de taper)
     delai_lecture = random.uniform(2.0, 6.0)
     await asyncio.sleep(delai_lecture)
@@ -100,14 +128,9 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
             for i, phrase in enumerate(phrases):
                 if not phrase.strip():
                     continue
-                
-                # Envoi normal
                 await repondre_message(sender_id, phrase.strip())
-                
-                # Délai VARIABLE entre chaque bulle (1.5s à 4.5s)
                 if i < len(phrases) - 1:
                     attente = random.uniform(1.5, 4.5)
-                    # Pause plus longue tous les 3 messages
                     if (i + 1) % 3 == 0:
                         attente += random.uniform(3.0, 7.0)
                     await asyncio.sleep(attente)
