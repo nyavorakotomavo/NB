@@ -3,28 +3,40 @@ NB — Génération de réponses IA (Mistral → Gemini).
 Personnalité : Geek + Mentor (Nyavodroid). Naturel, imprévisible, humain.
 """
 import re
+import asyncio
+import random
 import httpx
 
 from bot.config import MISTRAL_API_KEY, MISTRAL_URL, GEMINI_API_KEY, GEMINI_TEXT_URL, REQUEST_TIMEOUT, BOT_NAME
 from bot.language_detector import NOM_LANGUE
 
+
 def _nettoyer(texte: str) -> str:
+    """Nettoie le texte des caractères invisibles et du formatage."""
     texte = re.sub(r'[\u200e\u200f\u200b\u200c\u200d\ufeff\u00ad\u2060\u180e\u202a-\u202e\u2066-\u2069]', '', texte)
     texte = re.sub(r'\*\*(.*?)\*\*', r'\1', texte)
     texte = re.sub(r'\*(.*?)\*', r'\1', texte)
     texte = re.sub(r'^[-•]\s*', '', texte, flags=re.MULTILINE)
     return texte.strip()
 
+
 def _prompt_reponse(message: str, langue: str, intention: str, contexte_post: str, historique: list[dict]) -> str:
+    """
+    Construit le prompt SYSTEME avec la personnalité complète.
+    C'est ICI que la personnalité du bot est définie.
+    """
     nom_langue = NOM_LANGUE.get(langue, "français")
-    
+
     hist_texte = ""
     if historique:
         hist_texte = "\nDerniers échanges :\n" + "\n".join([f"  - {msg['contenu']}" for msg in historique[-3:]])
 
     contexte_texte = f"\nContexte du post : « {contexte_post[:150]} »\n" if contexte_post else ""
 
-    # PROMPT ORGANIQUE : On interdit les patterns répétitifs
+    # ============================================================
+    # ⚠️ PROMPT ORIGINAL - PERSONNALITÉ GEEK + MENTOR ⚠️
+    # NE PAS MODIFIER CE BLOC SAUF SI TU VEUX CHANGER LE STYLE
+    # ============================================================
     prompt = f"""Tu es {BOT_NAME}, un membre passionné de la communauté Nyavodroid. Tu discutes naturellement, comme sur Discord ou WhatsApp.
 
 RÈGLES ABSOLUES (À NE JAMAIS ENFREINDRE) :
@@ -47,30 +59,71 @@ Message reçu : "{message}"
 Réponds de manière naturelle, imprévisible et humaine, en {nom_langue} :"""
     return prompt
 
-async def generer_reponse(message: str, langue: str, intention: str, contexte_post: str = "", historique: list[dict] | None = None) -> str:
-    if historique is None: historique = []
+
+async def generer_reponse(
+    message: str,
+    langue: str,
+    intention: str,
+    contexte_post: str = "",
+    historique: list[dict] | None = None
+) -> str:
+    """
+    Génère une réponse via Mistral ou Gemini.
+    Ajoute une pause de réflexion pour simuler l'humain.
+    """
+    if historique is None:
+        historique = []
+
     prompt = _prompt_reponse(message, langue, intention, contexte_post, historique)
 
-    # === AJOUT : Simule le temps de "réflexion" avant de taper ===
-    # (l'humain réfléchit 1-3 secondes avant de commencer à répondre)
-    import asyncio
-    import random
+    # === SIMULATION RÉFLEXION HUMAINE (1-3s) ===
     await asyncio.sleep(random.uniform(1.0, 3.0))
 
-    # Mistral
+    # Tentative Mistral
     if MISTRAL_API_KEY:
         try:
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                resp = await client.post(MISTRAL_URL, headers={"Authorization": f"Bearer {MISTRAL_API_KEY}", "Content-Type": "application/json"}, json={"model": "mistral-small-latest", "messages": [{"role": "user", "content": prompt}], "max_tokens": 150, "temperature": 0.9})
+                resp = await client.post(
+                    MISTRAL_URL,
+                    headers={
+                        "Authorization": f"Bearer {MISTRAL_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": "mistral-small-latest",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "max_tokens": 150,
+                        "temperature": 0.9  # Légèrement plus créatif
+                    }
+                )
                 resp.raise_for_status()
-                return _nettoyer(resp.json()["choices"][0]["message"]["content"])
-        except Exception: pass
+                reponse = _nettoyer(resp.json()["choices"][0]["message"]["content"])
+                print(f"🧠 Mistral: {reponse[:50]}...")
+                return reponse
+        except Exception as e:
+            print(f"⚠️  Mistral échoué : {e}")
 
-    # Gemini Fallback
-    try:
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-            resp = await client.post(f"{GEMINI_TEXT_URL}?key={GEMINI_API_KEY}", headers={"Content-Type": "application/json"}, json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"maxOutputTokens": 150, "temperature": 0.9}})
-            resp.raise_for_status()
-            return _nettoyer(resp.json()["candidates"][0]["content"]["parts"][0]["text"])
-    except Exception:
-        return "Merci pour ton message, je regarde ça et je reviens vers toi !"
+    # Fallback Gemini
+    if GEMINI_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                resp = await client.post(
+                    f"{GEMINI_TEXT_URL}?key={GEMINI_API_KEY}",
+                    headers={"Content-Type": "application/json"},
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {
+                            "maxOutputTokens": 150,
+                            "temperature": 0.9
+                        }
+                    }
+                )
+                resp.raise_for_status()
+                reponse = _nettoyer(resp.json()["candidates"][0]["content"]["parts"][0]["text"])
+                print(f"🧠 Gemini: {reponse[:50]}...")
+                return reponse
+        except Exception as e:
+            print(f"⚠️  Gemini échoué : {e}")
+
+    # Fallback ultime
+    return "Merci pour ton message, je regarde ça et je reviens vers toi !"
