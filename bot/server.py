@@ -2,22 +2,16 @@
 NB — Serveur FastAPI (webhook Facebook).
 Reçoit les événements Facebook et répond en temps réel.
 Personnalité : Geek + Mentor (Nyavodroid).
-
-Evenements geres :
-  - Messages Messenger
-  - Commentaires sur les posts
-  - Reactions sur les posts
-
-100% webhook (pas de polling).
 """
 import time
 import asyncio
 import random
+import os
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse
 
-from bot.config import FB_VERIFY_TOKEN, BOT_NAME
+from bot.config import FB_VERIFY_TOKEN, BOT_NAME, FB_PAGE_ID
 from bot.fb_client import (
     verifier_signature,
     envoyer_message_humain,
@@ -33,13 +27,20 @@ from bot.conversation_store import (
     log_interaction,
 )
 
+# === LOGS DE DEMARRAGE ===
+print("=" * 50)
+print(f"🤖 {BOT_NAME} - Démarrage du serveur...")
+print(f"📱 FB_PAGE_ID: {FB_PAGE_ID[:10] if FB_PAGE_ID else 'NON DEFINI'}...")
+print(f"🔑 FB_VERIFY_TOKEN: {FB_VERIFY_TOKEN[:10] if FB_VERIFY_TOKEN else 'NON DEFINI'}...")
+print(f"🌐 Port: {int(os.environ.get('PORT', 8080))}")
+print("=" * 50)
+
 app = FastAPI(title=f"{BOT_NAME} — Nyavodroid Bot")
 
 # Cache pour éviter de répondre plusieurs fois aux réactions d'un même post
 _reactions_traitees: set[str] = set()
 
 
-# Verification du webhook (GET)
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     """Facebook envoie un GET pour vérifier l'URL du webhook."""
@@ -47,46 +48,55 @@ async def verify_webhook(request: Request):
     mode = params.get("hub.mode")
     token = params.get("hub.verify_token")
     challenge = params.get("hub.challenge")
-
+    
+    print(f"🔍 GET /webhook - mode: {mode}, challenge: {challenge}")
+    
     if mode == "subscribe" and token == FB_VERIFY_TOKEN:
+        print("✅ Webhook vérifié avec succès !")
         return PlainTextResponse(challenge)
+    
+    print("❌ Échec de vérification du webhook")
     return Response(status_code=403)
 
 
-# Reception des evenements (POST)
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     """Reçoit et traite les événements Facebook."""
     body = await request.body()
-
-    # Verifier la signature Facebook
+    
+    print("📨 REQUETE POST RECUE")
+    
+    # Vérifier la signature Facebook
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not verifier_signature(body, signature):
+        print("❌ Signature invalide")
         return Response(status_code=403)
+    
+    print("✅ Signature valide")
 
     data = await request.json()
+    print(f"📦 Données reçues: {str(data)[:200]}...")
 
-    # Compteur pour les pauses cafe
     compteur_utilisateurs = 0
 
     for entry in data.get("entry", []):
         # Messages Messenger
         for messaging in entry.get("messaging", []):
+            print("💬 Message Messenger reçu")
             await _gerer_message(messaging)
             compteur_utilisateurs += 1
-
-            # Delai entre chaque utilisateur (5-10s)
+            # Délai entre chaque utilisateur (5-10s)
             await asyncio.sleep(random.uniform(5.0, 10.0))
-
-            # Pause cafe toutes les 5 reponses
+            # Pause café toutes les 5 réponses
             if compteur_utilisateurs % 5 == 0:
                 await asyncio.sleep(random.uniform(8.0, 15.0))
 
-        # Feed (commentaires + reactions)
+        # Feed (commentaires + réactions)
         for change in entry.get("changes", []):
             value = change.get("value", {})
             item = value.get("item", "")
-
+            print(f"📌 Changement: {item}")
+            
             if item == "comment":
                 await _gerer_commentaire(value)
                 compteur_utilisateurs += 1
@@ -96,11 +106,9 @@ async def handle_webhook(request: Request):
             elif item == "reaction":
                 await _gerer_reaction(value)
 
-    # Facebook attend un 200 rapide
     return {"status": "ok"}
 
 
-# Gestion des messages Messenger
 async def _gerer_message(messaging: dict) -> None:
     """Traite un message Messenger entrant."""
     sender_id = messaging.get("sender", {}).get("id", "")
@@ -110,6 +118,8 @@ async def _gerer_message(messaging: dict) -> None:
     if not sender_id or not texte:
         return
 
+    print(f"📩 Message de {sender_id}: {texte[:50]}...")
+
     t0 = time.time()
 
     # Analyse
@@ -118,6 +128,7 @@ async def _gerer_message(messaging: dict) -> None:
 
     # Ignorer le spam
     if intention == "spam":
+        print(f"🚫 Spam ignoré de {sender_id}")
         return
 
     # Historique
@@ -126,7 +137,7 @@ async def _gerer_message(messaging: dict) -> None:
     # Sauvegarder le message entrant
     sauvegarder_message(sender_id, "messenger", "user", texte, langue)
 
-    # Generer la reponse
+    # Générer la réponse
     reponse = await generer_reponse(
         message=texte,
         langue=langue,
@@ -134,10 +145,10 @@ async def _gerer_message(messaging: dict) -> None:
         historique=historique,
     )
 
-    # Envoyer avec delai humain (Message Splitting)
+    # Envoyer avec délai humain
     await envoyer_message_humain(sender_id, reponse, type_envoi="message")
 
-    # Sauvegarder la reponse
+    # Sauvegarder la réponse
     sauvegarder_message(sender_id, "messenger", "bot", reponse, langue)
 
     # Analytics
@@ -147,7 +158,6 @@ async def _gerer_message(messaging: dict) -> None:
     print(f"  💬 Messenger [{langue}/{intention}] → {reponse[:60]}... ({temps:.1f}s)")
 
 
-# Gestion des commentaires
 async def _gerer_commentaire(value: dict) -> None:
     """Traite un nouveau commentaire sur un post."""
     verb = value.get("verb", "")
@@ -162,6 +172,8 @@ async def _gerer_commentaire(value: dict) -> None:
     if not comment_id or not texte:
         return
 
+    print(f"🗨️  Commentaire de {sender_id}: {texte[:50]}...")
+
     t0 = time.time()
 
     # Analyse
@@ -170,6 +182,7 @@ async def _gerer_commentaire(value: dict) -> None:
 
     # Ignorer le spam
     if intention == "spam":
+        print(f"🚫 Spam ignoré de {sender_id}")
         return
 
     # Contexte du post
@@ -181,7 +194,7 @@ async def _gerer_commentaire(value: dict) -> None:
     # Sauvegarder
     sauvegarder_message(sender_id, "comment", "user", texte, langue, post_id)
 
-    # Generer la reponse
+    # Générer la réponse
     reponse = await generer_reponse(
         message=texte,
         langue=langue,
@@ -190,7 +203,7 @@ async def _gerer_commentaire(value: dict) -> None:
         historique=historique,
     )
 
-    # Envoyer avec delai humain (Message Splitting)
+    # Envoyer avec délai humain
     await envoyer_message_humain(comment_id, reponse, type_envoi="commentaire")
 
     # Sauvegarder
@@ -203,12 +216,8 @@ async def _gerer_commentaire(value: dict) -> None:
     print(f"  🗨️  Commentaire [{langue}/{intention}] → {reponse[:60]}... ({temps:.1f}s)")
 
 
-# Gestion des reactions
 async def _gerer_reaction(value: dict) -> None:
-    """
-    Traite une reaction sur un post.
-    Poste un remerciement naturel (une seule fois par post).
-    """
+    """Traite une réaction sur un post."""
     verb = value.get("verb", "")
     if verb != "add":
         return
@@ -224,7 +233,6 @@ async def _gerer_reaction(value: dict) -> None:
         return
     _reactions_traitees.add(post_id)
 
-    # Messages de remerciement plus naturels et varies
     remerciements = {
         "like": "Merci pour le soutien ! Ça fait plaisir de voir que le contenu tech vous parle 🙏",
         "love": "Wow, merci pour tout cet amour ! Vous êtes la meilleure communauté tech 🤖❤️",
@@ -242,21 +250,18 @@ async def _gerer_reaction(value: dict) -> None:
     try:
         await commenter_post(post_id, texte)
         log_interaction("", "reaction", "fr", "remerciement", 0.0, post_id)
-        print(f"  👍 Reaction [{reaction_type}] sur {post_id} → remerciement poste")
+        print(f"  👍 Réaction [{reaction_type}] sur {post_id} → remerciement posté")
     except Exception as e:
-        print(f"  ⚠️  Erreur remerciement reaction : {e}")
+        print(f"  ⚠️  Erreur remerciement réaction : {e}")
 
 
-# Health check
 @app.get("/")
 async def health():
     return {"status": "ok", "bot": BOT_NAME, "version": "1.0"}
 
 
-# Demarrage
 if __name__ == "__main__":
     import uvicorn
-    import os
 
     port = int(os.environ.get("PORT", 8080))
     uvicorn.run(app, host="0.0.0.0", port=port)
