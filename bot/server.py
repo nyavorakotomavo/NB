@@ -3,14 +3,16 @@ NB — Serveur FastAPI (webhook Facebook).
 Reçoit les événements Facebook et répond en temps réel.
 Personnalité : Geek + Mentor (Nyavodroid).
 
-Événements gérés :
+Evenements geres :
   - Messages Messenger
   - Commentaires sur les posts
-  - Réactions sur les posts
+  - Reactions sur les posts
 
 100% webhook (pas de polling).
 """
 import time
+import asyncio
+import random
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse
@@ -37,9 +39,7 @@ app = FastAPI(title=f"{BOT_NAME} — Nyavodroid Bot")
 _reactions_traitees: set[str] = set()
 
 
-# ──────────────────────────────────────────────
-# Vérification du webhook (GET)
-# ──────────────────────────────────────────────
+# Verification du webhook (GET)
 @app.get("/webhook")
 async def verify_webhook(request: Request):
     """Facebook envoie un GET pour vérifier l'URL du webhook."""
@@ -53,41 +53,36 @@ async def verify_webhook(request: Request):
     return Response(status_code=403)
 
 
-# ──────────────────────────────────────────────
-# Réception des événements (POST)
-# ──────────────────────────────────────────────
+# Reception des evenements (POST)
 @app.post("/webhook")
 async def handle_webhook(request: Request):
     """Reçoit et traite les événements Facebook."""
     body = await request.body()
 
-    # Vérifier la signature Facebook
+    # Verifier la signature Facebook
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not verifier_signature(body, signature):
         return Response(status_code=403)
 
     data = await request.json()
 
-    # === AJOUT : Compteur pour les pauses café ===
+    # Compteur pour les pauses cafe
     compteur_utilisateurs = 0
-    import asyncio
-    import random
 
     for entry in data.get("entry", []):
-        # ── Messages Messenger ──
+        # Messages Messenger
         for messaging in entry.get("messaging", []):
             await _gerer_message(messaging)
             compteur_utilisateurs += 1
-            
-            # === AJOUT : Délai entre chaque utilisateur (5-10s) ===
-            # (simule le temps de lire et répondre à chaque personne)
+
+            # Delai entre chaque utilisateur (5-10s)
             await asyncio.sleep(random.uniform(5.0, 10.0))
-            
-            # === AJOUT : Pause café toutes les 5 réponses ===
+
+            # Pause cafe toutes les 5 reponses
             if compteur_utilisateurs % 5 == 0:
                 await asyncio.sleep(random.uniform(8.0, 15.0))
 
-        # ── Feed (commentaires + réactions) ──
+        # Feed (commentaires + reactions)
         for change in entry.get("changes", []):
             value = change.get("value", {})
             item = value.get("item", "")
@@ -95,20 +90,17 @@ async def handle_webhook(request: Request):
             if item == "comment":
                 await _gerer_commentaire(value)
                 compteur_utilisateurs += 1
-                
-                # === AJOUT : Délai entre chaque commentaire ===
                 await asyncio.sleep(random.uniform(5.0, 10.0))
-                
                 if compteur_utilisateurs % 5 == 0:
                     await asyncio.sleep(random.uniform(8.0, 15.0))
-                    
             elif item == "reaction":
                 await _gerer_reaction(value)
 
     # Facebook attend un 200 rapide
-    return {"status": "ok"} ──────────────────────────────────────────────
+    return {"status": "ok"}
+
+
 # Gestion des messages Messenger
-# ──────────────────────────────────────────────
 async def _gerer_message(messaging: dict) -> None:
     """Traite un message Messenger entrant."""
     sender_id = messaging.get("sender", {}).get("id", "")
@@ -134,7 +126,7 @@ async def _gerer_message(messaging: dict) -> None:
     # Sauvegarder le message entrant
     sauvegarder_message(sender_id, "messenger", "user", texte, langue)
 
-    # Générer la réponse
+    # Generer la reponse
     reponse = await generer_reponse(
         message=texte,
         langue=langue,
@@ -142,10 +134,10 @@ async def _gerer_message(messaging: dict) -> None:
         historique=historique,
     )
 
-    # Envoyer avec délai humain (Message Splitting)
+    # Envoyer avec delai humain (Message Splitting)
     await envoyer_message_humain(sender_id, reponse, type_envoi="message")
 
-    # Sauvegarder la réponse
+    # Sauvegarder la reponse
     sauvegarder_message(sender_id, "messenger", "bot", reponse, langue)
 
     # Analytics
@@ -155,9 +147,7 @@ async def _gerer_message(messaging: dict) -> None:
     print(f"  💬 Messenger [{langue}/{intention}] → {reponse[:60]}... ({temps:.1f}s)")
 
 
-# ──────────────────────────────────────────────
 # Gestion des commentaires
-# ──────────────────────────────────────────────
 async def _gerer_commentaire(value: dict) -> None:
     """Traite un nouveau commentaire sur un post."""
     verb = value.get("verb", "")
@@ -191,7 +181,7 @@ async def _gerer_commentaire(value: dict) -> None:
     # Sauvegarder
     sauvegarder_message(sender_id, "comment", "user", texte, langue, post_id)
 
-    # Générer la réponse
+    # Generer la reponse
     reponse = await generer_reponse(
         message=texte,
         langue=langue,
@@ -200,7 +190,7 @@ async def _gerer_commentaire(value: dict) -> None:
         historique=historique,
     )
 
-    # Envoyer avec délai humain (Message Splitting)
+    # Envoyer avec delai humain (Message Splitting)
     await envoyer_message_humain(comment_id, reponse, type_envoi="commentaire")
 
     # Sauvegarder
@@ -213,12 +203,10 @@ async def _gerer_commentaire(value: dict) -> None:
     print(f"  🗨️  Commentaire [{langue}/{intention}] → {reponse[:60]}... ({temps:.1f}s)")
 
 
-# ─────────────────────────────────────────────
-# Gestion des réactions
-# ──────────────────────────────────────────────
+# Gestion des reactions
 async def _gerer_reaction(value: dict) -> None:
     """
-    Traite une réaction sur un post.
+    Traite une reaction sur un post.
     Poste un remerciement naturel (une seule fois par post).
     """
     verb = value.get("verb", "")
@@ -236,7 +224,7 @@ async def _gerer_reaction(value: dict) -> None:
         return
     _reactions_traitees.add(post_id)
 
-    # Messages de remerciement plus naturels et variés
+    # Messages de remerciement plus naturels et varies
     remerciements = {
         "like": "Merci pour le soutien ! Ça fait plaisir de voir que le contenu tech vous parle 🙏",
         "love": "Wow, merci pour tout cet amour ! Vous êtes la meilleure communauté tech 🤖❤️",
@@ -254,22 +242,18 @@ async def _gerer_reaction(value: dict) -> None:
     try:
         await commenter_post(post_id, texte)
         log_interaction("", "reaction", "fr", "remerciement", 0.0, post_id)
-        print(f"  👍 Réaction [{reaction_type}] sur {post_id} → remerciement posté")
+        print(f"  👍 Reaction [{reaction_type}] sur {post_id} → remerciement poste")
     except Exception as e:
-        print(f"  ⚠️  Erreur remerciement réaction : {e}")
+        print(f"  ⚠️  Erreur remerciement reaction : {e}")
 
 
-# ──────────────────────────────────────────────
 # Health check
-# ──────────────────────────────────────────────
 @app.get("/")
 async def health():
     return {"status": "ok", "bot": BOT_NAME, "version": "1.0"}
 
 
-# ──────────────────────────────────────────────
-# Démarrage
-# ──────────────────────────────────────────────
+# Demarrage
 if __name__ == "__main__":
     import uvicorn
     import os
