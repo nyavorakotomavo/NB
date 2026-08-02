@@ -1,23 +1,23 @@
 """
 NB — Client Facebook Graph API.
-Gestion du délai humain, de l'indicateur de frappe ("...") et de l'envoi.
+Gestion du délai humain, de l'indicateur de frappe et de l'envoi.
 """
 import asyncio
 import hashlib
 import hmac
 import random
-import re
 import httpx
 
 from bot.config import FB_PAGE_ID, FB_PAGE_ACCESS_TOKEN, FB_APP_SECRET, GRAPH_VERSION
 
 BASE = f"https://graph.facebook.com/{GRAPH_VERSION}"
 
-# Cache pour éviter les doublons de réponses
+# Cache pour éviter les doublons
 _derniers_messages_envoyes: dict[str, str] = {}
 
 
 def verifier_signature(payload: bytes, signature: str) -> bool:
+    """Vérifie la signature du webhook Facebook."""
     expected = "sha256=" + hmac.new(
         FB_APP_SECRET.encode(),
         payload,
@@ -27,6 +27,7 @@ def verifier_signature(payload: bytes, signature: str) -> bool:
 
 
 async def _envoyer_action_frappe(sender_id: str) -> None:
+    """Active l'indicateur 'est en train d'écrire...'."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(
@@ -39,6 +40,7 @@ async def _envoyer_action_frappe(sender_id: str) -> None:
 
 
 async def _desactiver_action_frappe(sender_id: str) -> None:
+    """Désactive l'indicateur 'est en train d'écrire...'."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(
@@ -51,6 +53,7 @@ async def _desactiver_action_frappe(sender_id: str) -> None:
 
 
 async def repondre_message(sender_id: str, texte: str) -> bool:
+    """Envoie un message privé Messenger."""
     if not texte or not texte.strip():
         return False
 
@@ -73,6 +76,7 @@ async def repondre_message(sender_id: str, texte: str) -> bool:
 
 
 async def repondre_commentaire(comment_id: str, texte: str) -> bool:
+    """Répond à un commentaire."""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -86,6 +90,7 @@ async def repondre_commentaire(comment_id: str, texte: str) -> bool:
 
 
 async def commenter_post(post_id: str, texte: str) -> None:
+    """Poste un commentaire sur un post."""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             await client.post(
@@ -98,6 +103,7 @@ async def commenter_post(post_id: str, texte: str) -> None:
 
 
 async def get_post_message(post_id: str) -> str:
+    """Récupère le message d'un post."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -111,6 +117,7 @@ async def get_post_message(post_id: str) -> str:
 
 
 async def get_derniers_posts() -> list[dict]:
+    """Récupère les derniers posts de la page."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -140,7 +147,7 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
     if not texte or not texte.strip():
         return
 
-    # Vérifier si on a déjà envoyé la même réponse récemment
+    # Vérifier si on a déjà envoyé la même réponse récemment (30 secondes)
     clef_cache = f"{sender_id}_{texte[:30]}"
     if clef_cache in _derniers_messages_envoyes:
         print("⏭️  Message déjà envoyé récemment, ignoré.")
