@@ -12,12 +12,12 @@ from bot.config import FB_PAGE_ID, FB_PAGE_ACCESS_TOKEN, FB_APP_SECRET, GRAPH_VE
 
 BASE = f"https://graph.facebook.com/{GRAPH_VERSION}"
 
-# Cache pour éviter les doublons
-_derniers_messages_envoyes: dict[str, str] = {}
+# Cache pour éviter les doublons (30 secondes)
+_derniers_messages_envoyes: dict[str, float] = {}
+_CACHE_DUREE = 30.0
 
 
 def verifier_signature(payload: bytes, signature: str) -> bool:
-    """Vérifie la signature du webhook Facebook."""
     expected = "sha256=" + hmac.new(
         FB_APP_SECRET.encode(),
         payload,
@@ -27,7 +27,6 @@ def verifier_signature(payload: bytes, signature: str) -> bool:
 
 
 async def _envoyer_action_frappe(sender_id: str) -> None:
-    """Active l'indicateur 'est en train d'écrire...'."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(
@@ -40,7 +39,6 @@ async def _envoyer_action_frappe(sender_id: str) -> None:
 
 
 async def _desactiver_action_frappe(sender_id: str) -> None:
-    """Désactive l'indicateur 'est en train d'écrire...'."""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(
@@ -53,7 +51,6 @@ async def _desactiver_action_frappe(sender_id: str) -> None:
 
 
 async def repondre_message(sender_id: str, texte: str) -> bool:
-    """Envoie un message privé Messenger."""
     if not texte or not texte.strip():
         return False
 
@@ -76,7 +73,6 @@ async def repondre_message(sender_id: str, texte: str) -> bool:
 
 
 async def repondre_commentaire(comment_id: str, texte: str) -> bool:
-    """Répond à un commentaire."""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -90,7 +86,6 @@ async def repondre_commentaire(comment_id: str, texte: str) -> bool:
 
 
 async def commenter_post(post_id: str, texte: str) -> None:
-    """Poste un commentaire sur un post."""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             await client.post(
@@ -103,7 +98,6 @@ async def commenter_post(post_id: str, texte: str) -> None:
 
 
 async def get_post_message(post_id: str) -> str:
-    """Récupère le message d'un post."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -117,7 +111,6 @@ async def get_post_message(post_id: str) -> str:
 
 
 async def get_derniers_posts() -> list[dict]:
-    """Récupère les derniers posts de la page."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -135,7 +128,7 @@ async def get_derniers_posts() -> list[dict]:
 
 
 # ──────────────────────────────────────────────
-# ENVOI HUMAIN : UN SEUL MESSAGE PAR RÉPONSE
+# ENVOI HUMAIN : UN SEUL MESSAGE + CACHE
 # ──────────────────────────────────────────────
 async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "message") -> None:
     """
@@ -143,16 +136,19 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
     - Délai de lecture (2-4s)
     - Typing
     - Envoi d'UN SEUL message (pas de rafale)
+    - Cache pour éviter les doublons
     """
     if not texte or not texte.strip():
         return
 
-    # Vérifier si on a déjà envoyé la même réponse récemment (30 secondes)
+    # Vérifier le cache (30 secondes)
     clef_cache = f"{sender_id}_{texte[:30]}"
     if clef_cache in _derniers_messages_envoyes:
-        print("⏭️  Message déjà envoyé récemment, ignoré.")
-        return
-    _derniers_messages_envoyes[clef_cache] = texte
+        temps_ecoule = asyncio.get_event_loop().time() - _derniers_messages_envoyes[clef_cache]
+        if temps_ecoule < _CACHE_DUREE:
+            print(f"⏭️  Message déjà envoyé il y a {temps_ecoule:.0f}s, ignoré.")
+            return
+    _derniers_messages_envoyes[clef_cache] = asyncio.get_event_loop().time()
 
     # Délai de lecture
     await asyncio.sleep(random.uniform(2.0, 4.0))
@@ -162,7 +158,7 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
         await _envoyer_action_frappe(sender_id)
         await asyncio.sleep(random.uniform(1.5, 3.0))
 
-    # Envoi d'UN SEUL message (pas de découpage)
+    # Envoi d'UN SEUL message
     if type_envoi == "commentaire":
         await repondre_commentaire(sender_id, texte)
     else:
