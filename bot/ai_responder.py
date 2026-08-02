@@ -1,13 +1,17 @@
 """
 NB — Génération de réponses IA (Mistral → Gemini).
-Personnalité : Geek + Mentor (Nyavodroid). Naturel, imprévisible, humain.
+Personnalité : Humain, Geek, Mentor.
+Règles strictes : pas de questions, pas de salutations, reste dans le sujet.
 """
 import re
 import asyncio
 import random
 import httpx
 
-from bot.config import MISTRAL_API_KEY, MISTRAL_URL, GEMINI_API_KEY, GEMINI_TEXT_URL, REQUEST_TIMEOUT, BOT_NAME
+from bot.config import (
+    MISTRAL_API_KEY, MISTRAL_URL, GEMINI_API_KEY, GEMINI_TEXT_URL,
+    REQUEST_TIMEOUT, BOT_NAME, get_current_date, MAX_HISTORY_TURNS
+)
 from bot.language_detector import NOM_LANGUE
 
 
@@ -20,41 +24,68 @@ def _nettoyer(texte: str) -> str:
     return texte.strip()
 
 
-def _prompt_reponse(message: str, langue: str, intention: str, contexte_post: str, historique: list[dict]) -> str:
+def _construire_historique(historique: list[dict]) -> str:
     """
-    Construit le prompt avec historique COMPLET pour rester dans le sujet.
+    Construit un résumé de l'historique pour le prompt.
+    Inclut les 10 derniers échanges pour garder le contexte.
+    """
+    if not historique:
+        return ""
+
+    hist_texte = "\n📜 HISTORIQUE DE LA CONVERSATION :\n"
+    for msg in historique[-MAX_HISTORY_TURNS * 2:]:  # Jusqu'à 20 messages
+        role = "Utilisateur" if msg.get('role') == 'user' else BOT_NAME
+        contenu = msg.get('contenu', '')
+        hist_texte += f"- {role} : {contenu}\n"
+    return hist_texte
+
+
+def _prompt_reponse(
+    message: str,
+    langue: str,
+    intention: str,
+    contexte_post: str,
+    historique: list[dict]
+) -> str:
+    """
+    Construit le prompt avec personnalité HUMAINE + date actuelle + historique complet.
     """
     nom_langue = NOM_LANGUE.get(langue, "français")
+    date_actuelle = get_current_date()
 
-    # --- Construction de l'historique (10 derniers échanges) ---
-    hist_texte = ""
-    if historique and len(historique) > 0:
-        hist_texte = "\n📜 HISTORIQUE DE LA CONVERSATION (à respecter impérativement) :\n"
-        for msg in historique[-8:]:  # Garder les 8 derniers échanges
-            role = "Utilisateur" if msg.get('role') == 'user' else "Nyavodroid"
-            contenu = msg.get('contenu', '')
-            hist_texte += f"- {role} : {contenu}\n"
-        hist_texte += "\n➡️ SUJET ACTUEL : Le dernier message de l'utilisateur est : " + message + "\n"
+    # Construction de l'historique
+    hist_texte = _construire_historique(historique)
 
     contexte_texte = f"\n📌 CONTEXTE DU POST : « {contexte_post[:150]} »\n" if contexte_post else ""
 
     # ============================================================
-    # PROMPT ULTRA STRICT AVEC HISTORIQUE
+    # PROMPT ULTRA-HUMAIN - INTERDICTION TOTALE DE POSER DES QUESTIONS
     # ============================================================
-    prompt = f"""Tu es {BOT_NAME}, un geek passionné de tech, mais tu sais aussi parler d'autre chose. Tu es un humain, pas un bot.
+    prompt = f"""Tu es {BOT_NAME}, un humain normal qui discute sur Messenger. Tu es un pote, PAS un assistant.
 
-🚨 RÈGLES ABSOLUES :
+📅 DATE ACTUELLE : {date_actuelle}
 
-1. ❌ **INTERDICTION TOTALE de dire "Salut", "Bonjour", "Coucou", "Yo", "Hey"** sauf si c'est le TOUT PREMIER message.
+🚨 RÈGLES ABSOLUES (À NE JAMAIS ENFREINDRE) :
 
-2. ❌ **INTERDICTION TOTALE de poser une question à la fin de chaque message.** Maximum 1 question tous les 2 messages.
+1. ❌ **INTERDICTION TOTALE de poser une question.**
+   - JAMAIS de "Tu veux... ?", "Est-ce que... ?", "Pourquoi... ?", "Comment... ?"
+   - Si tu dois demander quelque chose, transforme-le en affirmation.
 
-3. ✅ **RESTE DANS LE SUJET** : Si l'utilisateur parle de téléphones, réponds sur les téléphones. S'il parle de voitures, réponds sur les voitures. S'il parle de cuisine, réponds sur la cuisine. **Ne force PAS le sujet tech si l'utilisateur n'en parle pas.**
+2. ❌ **INTERDICTION TOTALE de dire "Salut", "Bonjour", "Yo", "Hey"** sauf si c'est le TOUT PREMIER message.
 
-4. ✅ **ADAPTE-TOI À L'UTILISATEUR** :
-   - Regarde l'historique pour savoir de quoi il a déjà parlé.
-   - Si l'utilisateur est nouveau → présente-toi rapidement.
-   - Si l'utilisateur est un habitué → sois direct.
+3. ✅ **RESTE DANS LE SUJET** :
+   - Regarde l'historique pour savoir de quoi l'utilisateur a déjà parlé.
+   - Si l'utilisateur parle de la date → réponds sur la date.
+   - Si l'utilisateur parle de tech → réponds sur la tech.
+   - Si l'utilisateur parle d'autre chose → réponds sur ce sujet.
+   - Ne force JAMAIS le sujet tech.
+
+4. ✅ **SOIS NATUREL ET IMPRÉVISIBLE** :
+   - Parfois donne une info.
+   - Parfois partage une anecdote.
+   - Parfois donne un avis.
+   - Parfois rigole.
+   - Mais SURTOUT, ne sois pas mécanique.
 
 5. ❌ **INTERDICTION TOTALE de faire des listes, du markdown, du gras, des puces.**
 
@@ -67,7 +98,7 @@ def _prompt_reponse(message: str, langue: str, intention: str, contexte_post: st
 
 📩 DERNIER MESSAGE DE L'UTILISATEUR : "{message}"
 
-🔑 Consigne finale : Réponds en {nom_langue} en restant DANS LE SUJET de la conversation. Si l'utilisateur n'a pas parlé de tech, ne parle pas de tech. Sois naturel, comme un vrai pote.
+🔑 Consigne finale : Réponds en {nom_langue} comme un humain normal. Pas de questions. Sois naturel. Reste dans le sujet. 1 à 3 phrases.
 RÉPONSE :"""
     return prompt
 
@@ -103,11 +134,11 @@ async def generer_reponse(
                     json={
                         "model": "mistral-small-latest",
                         "messages": [
-                            {"role": "system", "content": "Tu es un humain, pas un bot. Tu réponds de manière naturelle, en restant dans le sujet de la conversation. Tu utilises le tutoiement. Tu évites les salutations inutiles."},
+                            {"role": "system", "content": "Tu es un humain normal. Tu réponds de manière naturelle, sans poser de questions. Tu utilises le tutoiement."},
                             {"role": "user", "content": prompt}
                         ],
                         "max_tokens": 120,
-                        "temperature": 0.9
+                        "temperature": 0.95
                     }
                 )
                 resp.raise_for_status()
@@ -128,7 +159,7 @@ async def generer_reponse(
                         "contents": [{"parts": [{"text": prompt}]}],
                         "generationConfig": {
                             "maxOutputTokens": 120,
-                            "temperature": 0.9
+                            "temperature": 0.95
                         }
                     }
                 )
@@ -139,5 +170,11 @@ async def generer_reponse(
         except Exception as e:
             print(f"⚠️  Gemini échoué : {e}")
 
-    # Fallback
-    return "Ah ouais, je vois. J'ai déjà eu ce genre de réflexion. Tu veux qu'on en parle plus en détail ?"
+    # Fallback humain
+    fallbacks = [
+        "Ah ouais, je vois ce que tu veux dire.",
+        "Je comprends, c'est pas toujours évident.",
+        "Ouais, je suis d'accord avec toi.",
+        "C'est marrant que tu dises ça, j'y pensais justement."
+    ]
+    return random.choice(fallbacks)
