@@ -29,6 +29,11 @@ if not GEMINI_API_KEY:
 SUPABASE_URL = _clean(os.environ.get("SUPABASE_URL", ""))
 SUPABASE_KEY = _clean(os.environ.get("SUPABASE_KEY", ""))
 
+# === FALLBACK : URL en dur si vide (pour Railway) ===
+if not SUPABASE_URL:
+    SUPABASE_URL = "https://efchirndbidiyzwezkgt.supabase.co"
+    print("⚠️  SUPABASE_URL manquant, utilisation de l'URL en dur")
+
 # ─── Bot ──────────────────────────────────────
 BOT_NAME = _clean(os.environ.get("BOT_NAME", "Nyavo Bot"))
 PORT = int(os.environ.get("PORT", 8080))
@@ -44,6 +49,12 @@ MAX_HISTORY_TURNS = 10
 # ─── Graph API ─────────────────────────────────
 GRAPH_VERSION = "v26.0"
 
-# ─── Vérification pour GitHub Actions ─────────
-if not FB_PAGE_ID:
-    print("⚠️  Mode GitHub Actions : variables non chargées (mode dégradé)") 
+# ─── Vérification au démarrage ────────────────
+print("=" * 50)
+print("🔧 CONFIGURATION CHARGEE")
+print(f"  ✅ FB_PAGE_ID: {FB_PAGE_ID[:10] if FB_PAGE_ID else 'NON DEFINI'}...")
+print(f"  ✅ SUPABASE_URL: {SUPABASE_URL[:30] if SUPABASE_URL else 'NON DEFINI'}...")
+print(f"  ✅ SUPABASE_KEY: {'PRESENT' if SUPABASE_KEY else 'NON DEFINI'}")
+print(f"  ✅ MISTRAL_API_KEY: {'PRESENT' if MISTRAL_API_KEY else 'NON DEFINI'}")
+print(f"  ✅ GEMINI_API_KEY: {'PRESENT' if GEMINI_API_KEY else 'NON DEFINI'}")
+print("=" * 50)
