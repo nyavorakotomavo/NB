@@ -12,9 +12,18 @@ _client: Client | None = None
 
 
 def _get_client() -> Client:
+    """Retourne le client Supabase avec vérification."""
     global _client
     if _client is None:
+        # === VERIFICATION ULTIME ===
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise Exception("❌ Supabase non configuré (URL ou KEY manquante)")
+        if not SUPABASE_URL.startswith("https://"):
+            raise Exception(f"❌ URL Supabase invalide : {SUPABASE_URL}")
+        
+        print(f"🔗 Connexion à Supabase : {SUPABASE_URL[:30]}...")
         _client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("✅ Connexion Supabase établie")
     return _client
 
 
@@ -22,10 +31,8 @@ def initialiser_tables() -> None:
     """
     Crée les tables si elles n'existent pas.
     À appeler une fois au démarrage du serveur.
-    Note : les tables sont créées via le SQL ci-dessous.
+    Note : les tables doivent être créées manuellement dans Supabase.
     """
-    # Les tables doivent être créées manuellement dans Supabase.
-    # Voir le SQL dans la documentation de déploiement.
     pass
 
 
@@ -38,32 +45,39 @@ def sauvegarder_message(
     post_id: str = "",
 ) -> None:
     """Sauvegarde un message dans l'historique."""
-    client = _get_client()
-    client.table("conversations").insert({
-        "user_id": user_id,
-        "platform": platform,
-        "role": role,
-        "contenu": contenu,
-        "langue": langue,
-        "post_id": post_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }).execute()
+    try:
+        client = _get_client()
+        client.table("conversations").insert({
+            "user_id": user_id,
+            "platform": platform,
+            "role": role,
+            "contenu": contenu,
+            "langue": langue,
+            "post_id": post_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as e:
+        print(f"⚠️  Erreur sauvegarde message : {e}")
 
 
 def get_historique(user_id: str, platform: str) -> list[dict]:
     """Récupère les N derniers messages d'un utilisateur."""
-    client = _get_client()
-    result = (
-        client.table("conversations")
-        .select("role, contenu, langue, created_at")
-        .eq("user_id", user_id)
-        .eq("platform", platform)
-        .order("created_at", desc=True)
-        .limit(MAX_HISTORY_TURNS)
-        .execute()
-    )
-    # Inverser pour avoir l'ordre chronologique
-    return list(reversed(result.data))
+    try:
+        client = _get_client()
+        result = (
+            client.table("conversations")
+            .select("role, contenu, langue, created_at")
+            .eq("user_id", user_id)
+            .eq("platform", platform)
+            .order("created_at", desc=True)
+            .limit(MAX_HISTORY_TURNS)
+            .execute()
+        )
+        # Inverser pour avoir l'ordre chronologique
+        return list(reversed(result.data))
+    except Exception as e:
+        print(f"⚠️  Erreur récupération historique : {e}")
+        return []
 
 
 def log_interaction(
@@ -75,13 +89,16 @@ def log_interaction(
     post_id: str = "",
 ) -> None:
     """Log une interaction pour les analytics."""
-    client = _get_client()
-    client.table("interactions").insert({
-        "user_id": user_id,
-        "type": type_interaction,
-        "langue": langue,
-        "intention": intention,
-        "temps_reponse": temps_reponse,
-        "post_id": post_id,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }).execute()
+    try:
+        client = _get_client()
+        client.table("interactions").insert({
+            "user_id": user_id,
+            "type": type_interaction,
+            "langue": langue,
+            "intention": intention,
+            "temps_reponse": temps_reponse,
+            "post_id": post_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as e:
+        print(f"⚠️  Erreur log interaction : {e}")
