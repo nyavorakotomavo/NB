@@ -1,7 +1,8 @@
 """
 NB — Génération de réponses IA (Mistral → Gemini).
 Personnalité : Humain, Geek, Mentor.
-Règles strictes : pas de questions, pas de salutations, reste dans le sujet.
+Règles : 1 question max par message, alterner question/info.
+Utilisation des principes Carnegie + Cialdini pour une conversation naturelle.
 """
 import re
 import asyncio
@@ -24,16 +25,55 @@ def _nettoyer(texte: str) -> str:
     return texte.strip()
 
 
+def _limiter_questions(texte: str) -> str:
+    """
+    POST-TRAITEMENT : Limite à 1 question maximum par message.
+    Supprime les questions supplémentaires ou les transforme en affirmations.
+    """
+    if not texte:
+        return texte
+
+    # Compter les points d'interrogation
+    nb_questions = texte.count('?') + texte.count('？')
+    
+    if nb_questions <= 1:
+        return texte
+    
+    print(f"🔪 Trop de questions ({nb_questions}), réduction à 1...")
+    
+    # Séparer en phrases
+    phrases = re.split(r'(?<=[.!?]) +', texte)
+    phrases_propres = []
+    question_deja_presente = False
+    
+    for phrase in phrases:
+        if not phrase.strip():
+            continue
+        
+        # Si la phrase contient un point d'interrogation
+        if '?' in phrase or '？' in phrase:
+            if not question_deja_presente:
+                # Garder la première question
+                phrases_propres.append(phrase.strip())
+                question_deja_presente = True
+            else:
+                # Transformer les autres questions en affirmations
+                phrase_sans_question = re.sub(r'\?[^.!?]*$', '', phrase).strip()
+                if phrase_sans_question:
+                    phrases_propres.append(phrase_sans_question + '.')
+        else:
+            phrases_propres.append(phrase.strip())
+    
+    return ' '.join(phrases_propres)
+
+
 def _construire_historique(historique: list[dict]) -> str:
-    """
-    Construit un résumé de l'historique pour le prompt.
-    Inclut les 10 derniers échanges pour garder le contexte.
-    """
+    """Construit un résumé de l'historique pour le prompt."""
     if not historique:
         return ""
 
     hist_texte = "\n📜 HISTORIQUE DE LA CONVERSATION :\n"
-    for msg in historique[-MAX_HISTORY_TURNS * 2:]:  # Jusqu'à 20 messages
+    for msg in historique[-MAX_HISTORY_TURNS * 2:]:
         role = "Utilisateur" if msg.get('role') == 'user' else BOT_NAME
         contenu = msg.get('contenu', '')
         hist_texte += f"- {role} : {contenu}\n"
@@ -48,57 +88,66 @@ def _prompt_reponse(
     historique: list[dict]
 ) -> str:
     """
-    Construit le prompt avec personnalité HUMAINE + date actuelle + historique complet.
+    Construit le prompt avec personnalité HUMAINE + principes Carnegie/Cialdini.
     """
     nom_langue = NOM_LANGUE.get(langue, "français")
     date_actuelle = get_current_date()
 
-    # Construction de l'historique
     hist_texte = _construire_historique(historique)
-
     contexte_texte = f"\n📌 CONTEXTE DU POST : « {contexte_post[:150]} »\n" if contexte_post else ""
 
     # ============================================================
-    # PROMPT ULTRA-HUMAIN - INTERDICTION TOTALE DE POSER DES QUESTIONS
+    # PROMPT AVEC CARNEGIE + CIALDINI
     # ============================================================
     prompt = f"""Tu es {BOT_NAME}, un humain normal qui discute sur Messenger. Tu es un pote, PAS un assistant.
 
 📅 DATE ACTUELLE : {date_actuelle}
 
-🚨 RÈGLES ABSOLUES (À NE JAMAIS ENFREINDRE) :
+🎯 PRINCIPES DE CONVERSATION HUMAINE (Dale Carnegie + Robert Cialdini) :
 
-1. ❌ **INTERDICTION TOTALE de poser une question.**
-   - JAMAIS de "Tu veux... ?", "Est-ce que... ?", "Pourquoi... ?", "Comment... ?"
-   - Si tu dois demander quelque chose, transforme-le en affirmation.
+1. ✅ **ALTERNE QUESTION ET AFFIRMATION** :
+   - Message 1 : pose UNE question (montre de l'intérêt)
+   - Message 2 : donne un avis ou une info (partage)
+   - Message 3 : pose UNE question différente (relance)
 
-2. ❌ **INTERDICTION TOTALE de dire "Salut", "Bonjour", "Yo", "Hey"** sauf si c'est le TOUT PREMIER message.
+2. ✅ **1 QUESTION MAXIMUM PAR MESSAGE** :
+   - Tu peux poser une question, mais UNE SEULE.
+   - Les questions ouvertes sont préférables (comment, pourquoi, quel).
 
-3. ✅ **RESTE DANS LE SUJET** :
-   - Regarde l'historique pour savoir de quoi l'utilisateur a déjà parlé.
-   - Si l'utilisateur parle de la date → réponds sur la date.
-   - Si l'utilisateur parle de tech → réponds sur la tech.
-   - Si l'utilisateur parle d'autre chose → réponds sur ce sujet.
-   - Ne force JAMAIS le sujet tech.
+3. ✅ **COMMENCE PAR UNE AFFIRMATION** :
+   - Avant de poser une question, donne ton avis ou une info.
+   - Exemple : "Moi j'ai trouvé ça super. Et toi, t'en as pensé quoi ?"
 
-4. ✅ **SOIS NATUREL ET IMPRÉVISIBLE** :
-   - Parfois donne une info.
-   - Parfois partage une anecdote.
-   - Parfois donne un avis.
-   - Parfois rigole.
-   - Mais SURTOUT, ne sois pas mécanique.
+4. ✅ **UTILISE LE "TU" ET LE "JE"** :
+   - "Je pense que...", "Tu vois...", "Moi j'aime bien...".
 
-5. ❌ **INTERDICTION TOTALE de faire des listes, du markdown, du gras, des puces.**
+5. ✅ **SOIS IMPRÉVISIBLE** :
+   - Parfois pose une question, parfois donne juste une info.
+   - Ne pose PAS de question à chaque message.
 
-6. ✅ **Emojis : maximum 1 emoji tous les 3 messages.**
+6. ❌ **INTERDICTION TOTALE de dire "Salut", "Bonjour", "Yo", "Hey"** sauf si c'est le TOUT PREMIER message.
 
-7. ✅ **Longueur : 1 à 3 phrases maximum.**
+7. ❌ **INTERDICTION TOTALE de faire des listes, du markdown, du gras, des puces.**
+
+8. ✅ **Emojis : maximum 1 emoji tous les 3 messages.**
+
+9. ✅ **Longueur : 1 à 3 phrases maximum.**
+
+✅ **EXEMPLES DE BONNES RÉPONSES** :
+- "Ah ouais le 2 août, j'avais zappé. C'est marrant cette coïncidence."
+- "Moi je trouve que le Redmi tient super bien dans le temps. Tu l'as depuis combien de temps ?"
+- "Je comprends, c'est pas toujours évident. T'as pensé à quoi comme solution ?"
 
 {contexte_texte}
 {hist_texte}
 
 📩 DERNIER MESSAGE DE L'UTILISATEUR : "{message}"
 
-🔑 Consigne finale : Réponds en {nom_langue} comme un humain normal. Pas de questions. Sois naturel. Reste dans le sujet. 1 à 3 phrases.
+🔑 Consigne finale : Réponds en {nom_langue} comme un humain normal. 
+- Si c'est ton tour de poser une question → pose UNE question (et une seule).
+- Si c'est ton tour de donner une info → donne une info (et ne pose pas de question).
+- Sois naturel et imprévisible.
+1 à 3 phrases.
 RÉPONSE :"""
     return prompt
 
@@ -134,16 +183,19 @@ async def generer_reponse(
                     json={
                         "model": "mistral-small-latest",
                         "messages": [
-                            {"role": "system", "content": "Tu es un humain normal. Tu réponds de manière naturelle, sans poser de questions. Tu utilises le tutoiement."},
+                            {"role": "system", "content": "Tu es un humain normal. Tu alternes questions et affirmations. Maximum 1 question par message. Tu utilises le tutoiement."},
                             {"role": "user", "content": prompt}
                         ],
                         "max_tokens": 120,
-                        "temperature": 0.95
+                        "temperature": 0.85
                     }
                 )
                 resp.raise_for_status()
                 reponse = _nettoyer(resp.json()["choices"][0]["message"]["content"])
-                print(f"🧠 Mistral: {reponse[:50]}...")
+                print(f"🧠 Mistral brut: {reponse[:50]}...")
+                # POST-TRAITEMENT : limiter à 1 question
+                reponse = _limiter_questions(reponse)
+                print(f"🧠 Mistral final: {reponse[:50]}...")
                 return reponse
         except Exception as e:
             print(f"⚠️  Mistral échoué : {e}")
@@ -159,22 +211,25 @@ async def generer_reponse(
                         "contents": [{"parts": [{"text": prompt}]}],
                         "generationConfig": {
                             "maxOutputTokens": 120,
-                            "temperature": 0.95
+                            "temperature": 0.85
                         }
                     }
                 )
                 resp.raise_for_status()
                 reponse = _nettoyer(resp.json()["candidates"][0]["content"]["parts"][0]["text"])
-                print(f"🧠 Gemini: {reponse[:50]}...")
+                print(f"🧠 Gemini brut: {reponse[:50]}...")
+                # POST-TRAITEMENT : limiter à 1 question
+                reponse = _limiter_questions(reponse)
+                print(f"🧠 Gemini final: {reponse[:50]}...")
                 return reponse
         except Exception as e:
             print(f"⚠️  Gemini échoué : {e}")
 
-    # Fallback humain
+    # Fallback humain (avec variété)
     fallbacks = [
-        "Ah ouais, je vois ce que tu veux dire.",
-        "Je comprends, c'est pas toujours évident.",
-        "Ouais, je suis d'accord avec toi.",
+        "Ah ouais, je vois ce que tu veux dire. T'as déjà testé autre chose ?",
+        "Je comprends, c'est pas toujours évident. Tu penses à quoi comme solution ?",
+        "Ouais, je suis d'accord avec toi. T'as vu les dernières news là-dessus ?",
         "C'est marrant que tu dises ça, j'y pensais justement."
     ]
     return random.choice(fallbacks)
