@@ -12,10 +12,13 @@ _client: Client | None = None
 
 
 def _get_client() -> Client:
-    """Retourne le client Supabase avec vérification."""
+    """
+    Retourne le client Supabase avec vérification.
+    Augmente le nombre de tours conservés pour un meilleur contexte.
+    """
     global _client
     if _client is None:
-        # === VERIFICATION ULTIME ===
+        # === VÉRIFICATIONS ===
         if not SUPABASE_URL or not SUPABASE_KEY:
             raise Exception("❌ Supabase non configuré (URL ou KEY manquante)")
         if not SUPABASE_URL.startswith("https://"):
@@ -33,6 +36,8 @@ def initialiser_tables() -> None:
     À appeler une fois au démarrage du serveur.
     Note : les tables doivent être créées manuellement dans Supabase.
     """
+    # Les tables sont créées via SQL dans l'interface Supabase.
+    # Voir la documentation pour les schémas.
     pass
 
 
@@ -44,7 +49,10 @@ def sauvegarder_message(
     langue: str,
     post_id: str = "",
 ) -> None:
-    """Sauvegarde un message dans l'historique."""
+    """
+    Sauvegarde un message dans l'historique.
+    Gère les erreurs silencieusement pour ne pas bloquer le bot.
+    """
     try:
         client = _get_client()
         client.table("conversations").insert({
@@ -61,7 +69,10 @@ def sauvegarder_message(
 
 
 def get_historique(user_id: str, platform: str) -> list[dict]:
-    """Récupère les N derniers messages d'un utilisateur."""
+    """
+    Récupère les N derniers messages d'un utilisateur.
+    Augmenté à 8 tours (16 messages) pour un meilleur contexte.
+    """
     try:
         client = _get_client()
         result = (
@@ -70,11 +81,13 @@ def get_historique(user_id: str, platform: str) -> list[dict]:
             .eq("user_id", user_id)
             .eq("platform", platform)
             .order("created_at", desc=True)
-            .limit(MAX_HISTORY_TURNS)
+            .limit(MAX_HISTORY_TURNS * 2)  # 8 tours = 16 messages
             .execute()
         )
-        # Inverser pour avoir l'ordre chronologique
-        return list(reversed(result.data))
+        # Inverser pour avoir l'ordre chronologique (du plus ancien au plus récent)
+        historique = list(reversed(result.data))
+        print(f"📚 Historique récupéré : {len(historique)} messages pour {user_id}")
+        return historique
     except Exception as e:
         print(f"⚠️  Erreur récupération historique : {e}")
         return []
@@ -88,7 +101,9 @@ def log_interaction(
     temps_reponse: float,
     post_id: str = "",
 ) -> None:
-    """Log une interaction pour les analytics."""
+    """
+    Log une interaction pour les analytics.
+    """
     try:
         client = _get_client()
         client.table("interactions").insert({
