@@ -22,19 +22,29 @@ async def _envoyer_action_frappe(sender_id: str) -> None:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             await client.post(f"{BASE}/me/messages", params={"access_token": FB_PAGE_ACCESS_TOKEN}, json={"recipient": {"id": sender_id}, "sender_action": "typing_on"})
-    except Exception: pass
+    except Exception as e:
+        print(f"⚠️  Erreur action frappe : {e}")
 
 async def repondre_message(sender_id: str, texte: str) -> None:
-    async with httpx.AsyncClient(timeout=30) as client:
-        await client.post(f"{BASE}/me/messages", params={"access_token": FB_PAGE_ACCESS_TOKEN}, json={"recipient": {"id": sender_id}, "message": {"text": texte}})
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            await client.post(f"{BASE}/me/messages", params={"access_token": FB_PAGE_ACCESS_TOKEN}, json={"recipient": {"id": sender_id}, "message": {"text": texte}})
+    except Exception as e:
+        print(f"⚠️  Erreur envoi message : {e}")
 
 async def repondre_commentaire(comment_id: str, texte: str) -> None:
-    async with httpx.AsyncClient(timeout=30) as client:
-        await client.post(f"{BASE}/{comment_id}/comments", params={"access_token": FB_PAGE_ACCESS_TOKEN}, json={"message": texte})
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            await client.post(f"{BASE}/{comment_id}/comments", params={"access_token": FB_PAGE_ACCESS_TOKEN}, json={"message": texte})
+    except Exception as e:
+        print(f"⚠️  Erreur envoi commentaire : {e}")
 
 async def commenter_post(post_id: str, texte: str) -> None:
-    async with httpx.AsyncClient(timeout=30) as client:
-        await client.post(f"{BASE}/{post_id}/comments", params={"access_token": FB_PAGE_ACCESS_TOKEN}, json={"message": texte})
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            await client.post(f"{BASE}/{post_id}/comments", params={"access_token": FB_PAGE_ACCESS_TOKEN}, json={"message": texte})
+    except Exception as e:
+        print(f"⚠️  Erreur commentaire post : {e}")
 
 async def get_post_message(post_id: str) -> str:
     try:
@@ -42,7 +52,9 @@ async def get_post_message(post_id: str) -> str:
             resp = await client.get(f"{BASE}/{post_id}", params={"access_token": FB_PAGE_ACCESS_TOKEN, "fields": "message"})
             resp.raise_for_status()
             return resp.json().get("message", "")[:300]
-    except Exception: return ""
+    except Exception as e:
+        print(f"⚠️  Erreur récupération post : {e}")
+        return ""
 
 async def get_derniers_posts() -> list[dict]:
     try:
@@ -50,7 +62,10 @@ async def get_derniers_posts() -> list[dict]:
             resp = await client.get(f"{BASE}/{FB_PAGE_ID}/posts", params={"access_token": FB_PAGE_ACCESS_TOKEN, "fields": "id,message,created_time", "limit": 10})
             resp.raise_for_status()
             return resp.json().get("data", [])
-    except Exception: return []
+    except Exception as e:
+        print(f"⚠️  Erreur récupération posts : {e}")
+        return []
+
 
 # ──────────────────────────────────────────────
 # Logique Humaine : Délai de lecture + Frappe
@@ -74,7 +89,7 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
 
     # 3. Envoi
     if type_envoi == "commentaire":
-        # Pour les commentaires, on envoie TOUT en une fois pour éviter le spam imbriqué Facebook
+        # Pour les commentaires, on envoie TOUT en une fois
         await repondre_commentaire(sender_id, texte)
     else:
         # Pour Messenger, on peut découper si c'est long
@@ -83,18 +98,16 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
             await repondre_message(sender_id, texte)
         else:
             for i, phrase in enumerate(phrases):
-                if not phrase.strip(): continue
+                if not phrase.strip():
+                    continue
                 
                 # Envoi normal
                 await repondre_message(sender_id, phrase.strip())
                 
-                # === AJOUT : Délai VARIABLE entre chaque bulle (1.5s à 4.5s) ===
+                # Délai VARIABLE entre chaque bulle (1.5s à 4.5s)
                 if i < len(phrases) - 1:
-                    # Délai de base
                     attente = random.uniform(1.5, 4.5)
-                    
-                    # Pause plus longue tous les 3 messages (simule la réflexion)
+                    # Pause plus longue tous les 3 messages
                     if (i + 1) % 3 == 0:
                         attente += random.uniform(3.0, 7.0)
-                    
                     await asyncio.sleep(attente)
