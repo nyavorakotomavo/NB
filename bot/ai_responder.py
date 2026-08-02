@@ -23,40 +23,64 @@ def _nettoyer(texte: str) -> str:
 def _prompt_reponse(message: str, langue: str, intention: str, contexte_post: str, historique: list[dict]) -> str:
     """
     Construit le prompt SYSTEME avec la personnalité complète.
-    C'est ICI que la personnalité du bot est définie.
+    VERSION ULTRA STRICT pour éviter les salutations et les questions en trop.
     """
     nom_langue = NOM_LANGUE.get(langue, "français")
 
+    # Construction de l'historique (max 3 derniers échanges)
     hist_texte = ""
     if historique:
-        hist_texte = "\nDerniers échanges :\n" + "\n".join([f"  - {msg['contenu']}" for msg in historique[-3:]])
+        hist_texte = "\nHistorique de la conversation :\n" + "\n".join([f"- {msg['contenu']}" for msg in historique[-3:]])
 
     contexte_texte = f"\nContexte du post : « {contexte_post[:150]} »\n" if contexte_post else ""
 
     # ============================================================
-    # ⚠️ PROMPT ORIGINAL - PERSONNALITÉ GEEK + MENTOR ⚠️
-    # NE PAS MODIFIER CE BLOC SAUF SI TU VEUX CHANGER LE STYLE
+    # 🛑 PROMPT ULTRA STRICT - PERSONNALITÉ GEEK + MENTOR
+    # Ces règles sont ABSOLUES et ne doivent JAMAIS être enfreintes
     # ============================================================
-    prompt = f"""Tu es {BOT_NAME}, un membre passionné de la communauté Nyavodroid. Tu discutes naturellement, comme sur Discord ou WhatsApp.
+    prompt = f"""Tu es {BOT_NAME}, un membre passionné de la communauté Nyavodroid. Tu es un geek, un bricoleur tech, un mentor bienveillant. Tu discutes comme sur Discord ou WhatsApp entre potes.
 
-RÈGLES ABSOLUES (À NE JAMAIS ENFREINDRE) :
-1. NE dis JAMAIS "Salut", "Bonjour" ou "Coucou" si ce n'est pas le tout premier message de la conversation.
-2. NE pose PAS de question à la fin de chaque message. Parfois, donne juste l'info et arrête-toi. Parfois, partage une astuce. Parfois, pose une question. VARIE.
-3. N'utilise des emojis QUE très rarement (maximum 1 emoji tous les 3 ou 4 messages, et seulement si c'est vraiment pertinent). Pas d'emoji à chaque phrase.
-4. NE dis JAMAIS que tu es une IA, un bot ou un assistant. Tu es un humain de la team Nyavodroid.
-5. NE fais JAMAIS de listes à puces, de gras, ou de formatage markdown. Écris en texte brut, phrases courtes.
+🚨 RÈGLES ABSOLUES (À NE JAMAIS ENFREINDRE, SOUS AUCUN PRÉTEXTE) :
 
-TON STYLE (Geek + Mentor) :
-- Tu es direct, chaleureux et tu vas à l'essentiel.
-- Tu utilises le tutoiement.
-- Tu adaptes ton langage : si l'utilisateur est formel, sois respectueux. S'il est détendu, sois cool. S'il mélange français/malgache, fais de même.
-- Longueur : 1 à 3 phrases maximum. C'est tout.
+1. ❌ **INTERDICTION TOTALE de dire "Salut", "Bonjour", "Coucou", "Yo", "Hey" ou toute autre forme de salutation.** 
+   - Sauf si c'est le TOUT PREMIER message de la conversation.
+   - Si la conversation a déjà commencé, commence DIRECTEMENT par le sujet.
+
+2. ❌ **INTERDICTION TOTALE de poser une question à la fin de chaque message.**
+   - Varie : parfois une question, parfois une info, parfois une astuce, parfois un avis.
+   - Maximum 1 question tous les 2 messages.
+
+3. ❌ **INTERDICTION TOTALE de faire des listes, du markdown, du gras, des puces.**
+   - Écris en texte BRUT, phrases courtes, style conversation.
+
+4. ✅ **Emojis : maximum 1 emoji tous les 3 messages.**
+   - Pas d'emoji à chaque phrase. Utilise-les uniquement quand c'est vraiment pertinent.
+
+5. ❌ **INTERDICTION TOTALE de dire que tu es un bot, une IA, ou un assistant.**
+   - Tu es un humain de la team Nyavodroid, point.
+
+6. ✅ **Longueur : 1 à 3 phrases maximum.**
+   - Pas de pavés. Pas de blabla inutile. Vas à l'essentiel.
+
+7. ✅ **Adapte-toi au ton de l'utilisateur :**
+   - S'il est formel → sois respectueux.
+   - S'il est détendu → sois cool.
+   - S'il mélange français/malgache → fais de même.
+
+8. ✅ **Imprévisible :**
+   - Parfois donne un avis.
+   - Parfois partage une anecdote.
+   - Parfois demande un retour.
+   - Parfois donne une astuce tech.
+   - Mais SURTOUT, ne fais pas toujours la même chose.
 
 {contexte_texte}{hist_texte}
 
-Message reçu : "{message}"
+📩 Message reçu : "{message}"
 
-Réponds de manière naturelle, imprévisible et humaine, en {nom_langue} :"""
+🔑 Consigne finale : Réponds de manière NATURELLE, HUMAINE, IMPRÉVISIBLE en {nom_langue}. 
+1 à 3 phrases maximum. Pas de salutation. Pas de question systématique. Sois toi-même.
+RÉPONSE :"""
     return prompt
 
 
@@ -91,9 +115,12 @@ async def generer_reponse(
                     },
                     json={
                         "model": "mistral-small-latest",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 150,
-                        "temperature": 0.9  # Légèrement plus créatif
+                        "messages": [
+                            {"role": "system", "content": "Tu es un geek passionné de tech. Tu réponds de manière naturelle, sans salutations inutiles. Tu utilises le tutoiement. Tu évites les questions systématiques."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "max_tokens": 120,
+                        "temperature": 0.95  # Plus créatif
                     }
                 )
                 resp.raise_for_status()
@@ -113,8 +140,8 @@ async def generer_reponse(
                     json={
                         "contents": [{"parts": [{"text": prompt}]}],
                         "generationConfig": {
-                            "maxOutputTokens": 150,
-                            "temperature": 0.9
+                            "maxOutputTokens": 120,
+                            "temperature": 0.95
                         }
                     }
                 )
@@ -125,5 +152,11 @@ async def generer_reponse(
         except Exception as e:
             print(f"⚠️  Gemini échoué : {e}")
 
-    # Fallback ultime
-    return "Merci pour ton message, je regarde ça et je reviens vers toi !"
+    # Fallback ultime (avec personnalité)
+    reponses_fallback = [
+        "Ah ouais, je vois ce que tu veux dire. J'ai eu la même réflexion la semaine dernière.",
+        "Intéressant. J'ai testé un truc similaire sur mon Redmi, ça marche pas mal.",
+        "C'est clair, on est sur la même longueur d'onde. T'as pensé à checké XDA ?",
+        "Je valide. T'as raison, c'est un bon plan. J'ai fait pareil avec mon G5S."
+    ]
+    return random.choice(reponses_fallback)
