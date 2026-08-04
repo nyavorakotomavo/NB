@@ -1,10 +1,9 @@
 """
 NB — Serveur FastAPI (webhook Facebook).
-CORRECTIONS :
-- UN SEUL message par tour (pas de rafale)
-- Délai humain réaliste (15-45s selon longueur)
-- Cache anti-doublon strict (60s)
-- Pause café toutes les 3 réponses
+CORRECTIONS CRITIQUES :
+- Anti-rafale basé sur l'ID du message (pas le texte)
+- UN SEUL traitement par message entrant
+- Réponse immédiate aux questions directes
 """
 import time
 import asyncio
@@ -37,9 +36,11 @@ print("=" * 50)
 
 app = FastAPI(title=f"{BOT_NAME} — Nyavodroid Bot")
 
+# 🚫 Cache anti-rafale basé sur l'ID du message (pas le texte)
+_messages_traites: set[str] = set()
+_CACHE_DUREE_MSG = 120  # 2 minutes
+
 _reactions_traitees: set[str] = set()
-_derniers_traitements: dict[str, float] = {}
-_CACHE_TRAITEMENT = 60.0  # 60 secondes entre deux traitements du même utilisateur
 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
@@ -68,32 +69,27 @@ async def handle_webhook(request: Request):
     data = await request.json()
     print(f"📦 Données reçues: {str(data)[:200]}...")
     
-    compteur_utilisateurs = 0
-    
     for entry in data.get("entry", []):
+        # Messages Messenger
         for messaging in entry.get("messaging", []):
-            sender_id = messaging.get("sender", {}).get("id", "")
+            # 🚫 Anti-rafale : vérifier l'ID du message
+            msg_id = messaging.get("message", {}).get("mid", "")
+            if not msg_id:
+                continue
             
-            # 🚫 ANTI-SPAM : Un seul traitement par utilisateur par 60s
-            if sender_id in _derniers_traitements:
-                temps_ecoule = time.time() - _derniers_traitements[sender_id]
-                if temps_ecoule < _CACHE_TRAITEMENT:
-                    print(f"⏭️  Utilisateur {sender_id} déjà traité il y a {temps_ecoule:.0f}s, ignoré.")
-                    continue
+            if msg_id in _messages_traites:
+                print(f"⏭️  Message {msg_id} déjà traité, ignoré.")
+                continue
+            
+            _messages_traites.add(msg_id)
+            # Nettoyage du cache (garder seulement les 1000 derniers)
+            if len(_messages_traites) > 1000:
+                _messages_traites.clear()
             
             print("💬 Message Messenger reçu")
             await _gerer_message(messaging)
-            _derniers_traitements[sender_id] = time.time()
-            compteur_utilisateurs += 1
-            
-            # Délai entre chaque utilisateur (8-15s)
-            await asyncio.sleep(random.uniform(8.0, 15.0))
-            
-            # Pause café toutes les 3 réponses
-            if compteur_utilisateurs % 3 == 0:
-                print("☕ Pause café...")
-                await asyncio.sleep(random.uniform(15.0, 25.0))
         
+        # Feed (commentaires + réactions)
         for change in entry.get("changes", []):
             value = change.get("value", {})
             item = value.get("item", "")
@@ -101,21 +97,11 @@ async def handle_webhook(request: Request):
             
             if item == "comment":
                 comment_id = value.get("comment_id", "")
-                
-                if comment_id in _derniers_traitements:
-                    temps_ecoule = time.time() - _derniers_traitements[comment_id]
-                    if temps_ecoule < _CACHE_TRAITEMENT:
-                        print(f"⏭️  Commentaire {comment_id} déjà traité, ignoré.")
-                        continue
-                
+                if comment_id in _messages_traites:
+                    print(f"⏭️  Commentaire {comment_id} déjà traité, ignoré.")
+                    continue
+                _messages_traites.add(comment_id)
                 await _gerer_commentaire(value)
-                _derniers_traitements[comment_id] = time.time()
-                compteur_utilisateurs += 1
-                await asyncio.sleep(random.uniform(8.0, 15.0))
-                
-                if compteur_utilisateurs % 3 == 0:
-                    print("☕ Pause café...")
-                    await asyncio.sleep(random.uniform(15.0, 25.0))
             
             elif item == "reaction":
                 await _gerer_reaction(value)
