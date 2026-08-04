@@ -1,15 +1,13 @@
 """
 NB — Stockage des conversations (Supabase).
 Historique multi-tours + analytics.
+CORRECTION : ordre chronologique correct pour le contexte.
 """
 from datetime import datetime, timezone
-
 from supabase import create_client, Client
-
 from bot.config import SUPABASE_URL, SUPABASE_KEY, MAX_HISTORY_TURNS
 
 _client: Client | None = None
-
 
 def _get_client() -> Client:
     """Retourne le client Supabase avec vérification."""
@@ -19,12 +17,10 @@ def _get_client() -> Client:
             raise Exception("❌ Supabase non configuré (URL ou KEY manquante)")
         if not SUPABASE_URL.startswith("https://"):
             raise Exception(f"❌ URL Supabase invalide : {SUPABASE_URL}")
-        
         print(f"🔗 Connexion à Supabase : {SUPABASE_URL[:30]}...")
         _client = create_client(SUPABASE_URL, SUPABASE_KEY)
         print("✅ Connexion Supabase établie")
     return _client
-
 
 def sauvegarder_message(
     user_id: str,
@@ -49,11 +45,10 @@ def sauvegarder_message(
     except Exception as e:
         print(f"⚠️  Erreur sauvegarde message : {e}")
 
-
 def get_historique(user_id: str, platform: str) -> list[dict]:
     """
     Récupère les 10 derniers tours de conversation (20 messages).
-    Garde un historique plus long pour un meilleur contexte.
+    CORRECTION : ordre ASC pour garder le contexte chronologique correct.
     """
     try:
         client = _get_client()
@@ -62,17 +57,16 @@ def get_historique(user_id: str, platform: str) -> list[dict]:
             .select("role, contenu, langue, created_at")
             .eq("user_id", user_id)
             .eq("platform", platform)
-            .order("created_at", desc=True)
-            .limit(MAX_HISTORY_TURNS * 2)  # 10 tours = 20 messages
+            .order("created_at", asc=True)  # ✅ CORRECTION : ordre chronologique
+            .limit(MAX_HISTORY_TURNS * 2)
             .execute()
         )
-        historique = list(reversed(result.data))
+        historique = result.data  # ✅ Déjà dans le bon ordre
         print(f"📚 Historique récupéré : {len(historique)} messages pour {user_id}")
         return historique
     except Exception as e:
         print(f"⚠️  Erreur récupération historique : {e}")
         return []
-
 
 def log_interaction(
     user_id: str,
