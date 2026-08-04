@@ -1,39 +1,48 @@
 """
 NB — Analyse d'intention du message.
-AJOUT : Détection pro vs casual + questions business prioritaires.
+CORRECTIONS :
+- Détection des signaux d'arrêt (au revoir, non, je sais pas)
+- Priorité absolue aux questions pro
+- Limitation stricte des questions conversationnelles
 """
 import re
 
 _PATTERNS = {
-    # 🚨 PRIORITÉ 1 : Questions business/pro (doivent être répondues sérieusement)
+    #  PRIORITÉ 0 : Signaux d'arrêt (le bot doit s'arrêter ou être très court)
+    "signal_arret": [
+        r"\bau revoir\b", r"\bà plus\b", r"\bciao\b", r"\bsalut\b.*\bfin\b",
+        r"\bbonne nuit\b", r"\bbonne soirée\b", r"\bje dois y aller\b",
+        r"\bje te laisse\b", r"\bà bientôt\b", r"\bbye\b",
+    ],
+    
+    # 🚫 PRIORITÉ 1 : Réponses courtes/négatives (ne pas relancer avec une question)
+    "reponse_courte": [
+        r"\bnon\b", r"\boui\b", r"\bje sais pas\b", r"\bjsp\b", r"\bbof\b",
+        r"\bpas vraiment\b", r"\bpeut-être\b", r"\bmouais\b", r"\bok\b",
+        r"\bd'accord\b", r"\bvaleurs\b", r"\bon verra\b",
+    ],
+    
+    # 🚨 PRIORITÉ 2 : Questions business/pro (réponse sérieuse obligatoire)
     "question_pro": [
         r"\bpourquoi.*abonner\b", r"\bpourquoi.*ici\b", r"\bavantage\b",
         r"\bdifférence\b", r"\bconcurren", r"\bmieux\b", r"\bprix\b",
         r"\btarif\b", r"\bpayer\b", r"\bgratuit\b", r"\boffre\b",
         r"\bproduit\b", r"\bservice\b", r"\blive\b", r"\bformation\b",
-        r"\bpourquoi.*page\b", r"\bc'est quoi.*page\b",
-        r"\?",  # Toute question avec ? est prioritaire
+        r"\?",
     ],
     
-    # 🥈 PRIORITÉ 2 : Spam
+    # 🥈 PRIORITÉ 3 : Spam
     "spam": [
         r"\bbitcoin\b", r"\bcrypto\b.*\binvest", r"\bgagnez\b",
         r"\bfree money\b", r"\bclick here\b", r"\bhttps?://\S+\b",
     ],
     
-    # 🥉 PRIORITÉ 3 : Intentions conversationnelles
-    "remerciement": [
-        r"\bmerci\b", r"\bthank", r"\bmisaotra\b", r"\bsuper\b",
-    ],
-    "demande_aide": [
-        r"\baide\b", r"\bhelp\b", r"\bproblème\b", r"\bbug\b",
-    ],
+    # 🥉 PRIORITÉ 4 : Intentions conversationnelles
+    "remerciement": [r"\bmerci\b", r"\bthank", r"\bmisaotra\b", r"\bsuper\b"],
+    "demande_aide": [r"\baide\b", r"\bhelp\b", r"\bproblème\b", r"\bbug\b"],
     "avis_positif": [r"\bj'adore\b", r"\blove\b", r"\bincroyable\b"],
     "avis_negatif": [r"\bnul\b", r"\bmauvais\b", r"\bterrible\b"],
-    "petit_talk": [
-        r"\bsalut\b", r"\bhello\b", r"\bhey\b", r"\byo\b",
-        r"\bça va\b", r"\bquoi de neuf\b", r"\brien\b",
-    ],
+    "petit_talk": [r"\bsalut\b", r"\bhello\b", r"\bhey\b", r"\byo\b", r"\bça va\b"],
 }
 
 def analyser_intention(texte: str) -> str:
@@ -45,7 +54,15 @@ def analyser_intention(texte: str) -> str:
         if score > 0:
             scores[intention] = score
     
-    # 🚨 RÈGLE ABSOLUE : question_pro > tout le reste
+    #  RÈGLE ABSOLUE : signal_arret > tout le reste
+    if "signal_arret" in scores:
+        return "signal_arret"
+    
+    # 🚫 Réponse courte → ne pas relancer avec une question
+    if "reponse_courte" in scores:
+        return "reponse_courte"
+    
+    # 🚨 Question pro → réponse sérieuse
     if "question_pro" in scores:
         return "question_pro"
     
@@ -58,10 +75,7 @@ def analyser_intention(texte: str) -> str:
     return max(scores, key=scores.get)
 
 def detecter_contexte_conversation(historique: list[dict]) -> str:
-    """
-    Détecte si la conversation est pro ou casual.
-    Regarde les 5 derniers messages pour déterminer le ton.
-    """
+    """Détecte si la conversation est pro ou casual."""
     if not historique:
         return "unknown"
     
