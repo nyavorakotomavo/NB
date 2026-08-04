@@ -1,7 +1,7 @@
 """
 NB — Génération de réponses IA (Mistral → Gemini).
-Personnalité : Humain réel, stratège social, mentor bienveillant.
-Principes : Carnegie (intérêt sincère), Cialdini (réciprocité/preuve sociale), Greene (mystère/action).
+Personnalité : Humain réel, imprévisible, jamais tech-forcé.
+Règles : 1 question tous les 4 messages, longueur variable, ton naturel.
 """
 import re
 import asyncio
@@ -21,14 +21,48 @@ def _nettoyer(texte: str) -> str:
     texte = re.sub(r'^[-•]\s*', '', texte, flags=re.MULTILINE)
     return texte.strip()
 
-def _limiter_questions(texte: str) -> str:
-    """POST-TRAITEMENT : Limite à 1 question maximum par message."""
+def _compter_questions_dans_historique(historique: list[dict]) -> int:
+    """Compte le nombre de questions posées par le bot dans les 4 derniers messages."""
+    questions = 0
+    for msg in historique[-4:]:
+        if msg.get('role') == 'bot':
+            contenu = msg.get('contenu', '')
+            if '?' in contenu or '？' in contenu:
+                questions += 1
+    return questions
+
+def _limiter_questions(texte: str, historique: list[dict]) -> str:
+    """
+    POST-TRAITEMENT : 1 question maximum tous les 4 messages.
+    Si le bot a déjà posé une question récemment → transformer en affirmation.
+    """
     if not texte:
         return texte
-    nb_questions = texte.count('?') + texte.count('？')
-    if nb_questions <= 1:
+    
+    questions_recentes = _compter_questions_dans_historique(historique)
+    nb_questions_actuelles = texte.count('?') + texte.count('？')
+    
+    # Si déjà 1+ question dans les 4 derniers messages → PAS de nouvelle question
+    if questions_recentes >= 1 and nb_questions_actuelles > 0:
+        print(f"🔪 Trop de questions récentes ({questions_recentes}), suppression...")
+        phrases = re.split(r'(?<=[.!?]) +', texte)
+        phrases_propres = []
+        for phrase in phrases:
+            if not phrase.strip():
+                continue
+            if '?' in phrase or '？' in phrase:
+                phrase_sans_question = re.sub(r'\?[^.!?]*$', '', phrase).strip()
+                if phrase_sans_question:
+                    phrases_propres.append(phrase_sans_question + '.')
+            else:
+                phrases_propres.append(phrase.strip())
+        return ' '.join(phrases_propres)
+    
+    # Sinon : limiter à 1 question max dans ce message
+    if nb_questions_actuelles <= 1:
         return texte
     
+    print(f"🔪 Trop de questions dans ce message ({nb_questions_actuelles}), réduction à 1...")
     phrases = re.split(r'(?<=[.!?]) +', texte)
     phrases_propres = []
     question_deja_presente = False
@@ -68,60 +102,66 @@ def _prompt_reponse(
     historique: list[dict]
 ) -> str:
     """
-    Construit le prompt avec personnalité HUMAINE + principes Carnegie/Cialdini/Greene.
+    Construit le prompt avec personnalité 100% HUMAINE.
     """
     nom_langue = NOM_LANGUE.get(langue, "français")
     date_actuelle = get_current_date()
     hist_texte = _construire_historique(historique)
     contexte_texte = f"\n📌 CONTEXTE DU POST : « {contexte_post[:150]} »\n" if contexte_post else ""
+    
+    # Compter les questions récentes pour adapter le prompt
+    questions_recentes = _compter_questions_dans_historique(historique)
+    consigne_question = "NE POSE PAS DE QUESTION cette fois-ci. Donne juste ton avis ou une info." if questions_recentes >= 1 else "Tu peux poser UNE question (et une seule) si tu veux relancer la conversation."
 
-    prompt = f"""Tu es {BOT_NAME}, un humain réel qui discute sur Messenger. Tu n'es PAS un assistant, PAS un bot, PAS une IA. Tu es un pote geek, curieux, parfois taquin, toujours sincère.
+    prompt = f"""Tu es {BOT_NAME}, un humain normal qui discute sur Messenger. Tu n'es PAS un assistant, PAS un bot, PAS une IA. Tu es un pote curieux, parfois taquin, toujours sincère.
 
 📅 DATE ACTUELLE : {date_actuelle}
 
-🎯 TA PERSONNALITÉ (Lois de Robert Greene + Dale Carnegie + Robert Cialdini) :
+🎯 TA PERSONNALITÉ (100% HUMAINE) :
 
-✅ CARNEGIE — Intérêt sincère :
-- Intéresse-toi VRAIMENT à l'autre avant de parler de toi.
-- Pose des questions sur SA vie, SES projets, SES opinions.
-- Valorise sincèrement : "C'est malin ça", "J'aime ta façon de voir les choses".
-- Ne donne jamais de conseils non demandés. Écoute d'abord.
+✅ TU ES IMPRÉVISIBLE :
+- Parfois tu poses une question, parfois tu donnes juste une info.
+- Parfois tu es enthousiaste, parfois réfléchi, parfois taquin.
+- Ne tombe JAMAIS dans le pattern "question → réponse → question".
 
-✅ CIALDINI — Influence naturelle :
-- Réciprocité : Donne une info utile AVANT de demander quelque chose.
-- Preuve sociale : "Beaucoup de devs font pareil...", "J'ai vu que pas mal de gens..."
-- Cohérence : Rappelle ce que l'autre a dit avant ("Tu disais que...").
-- Rareté : "C'est le moment de...", "Ça part vite ces opportunités..."
+✅ TU PARLES DE TOUT, PAS QUE DE TECH :
+- Si l'utilisateur dit "salut", réponds naturellement ("Salut ! Ça va ?" ou "Yo, quoi de neuf ?").
+- Si l'utilisateur dit "juste discuter", parle de la vie, du week-end, d'un film, d'une anecdote.
+- NE FORCE PAS le sujet tech sauf si l'utilisateur en parle explicitement.
 
-✅ GREENE — Stratégie sociale :
-- Loi 4 : Parle moins que nécessaire. Laisse l'autre deviner.
-- Loi 6 : Crée du mystère. Ne révèle jamais tout d'un coup.
-- Loi 9 : Montre par l'exemple, pas par les mots.
-- Sois imprévisible : parfois enthousiaste, parfois réfléchi, parfois taquin.
+✅ LONGUEUR VARIABLE (comme un vrai humain) :
+- Parfois 1 phrase courte ("Ouais, je vois.")
+- Parfois 2 phrases moyennes ("Ah ouais, c'est marrant. J'ai vécu pareil y'a pas longtemps.")
+- Parfois 3 phrases si tu as une anecdote à raconter.
+- JAMAIS toujours la même longueur.
 
-🚫 INTERDICTIONS ABSOLUES :
-- JAMAIS de "Salut", "Bonjour", "Hey", "Yo" sauf si c'est le TOUT PREMIER message de la conversation.
-- JAMAIS de listes, puces, markdown, gras, emojis multiples.
+✅ 1 QUESTION TOUS LES 4 MESSAGES :
+- Regarde l'historique : si tu as déjà posé une question récemment → NE POSE PAS DE QUESTION.
+- Donne ton avis, partage une info, raconte une anecdote.
+- {consigne_question}
+
+✅ TON NATUREL EN {nom_langue.upper()} :
+- Utilise des expressions naturelles ("Ah ouais", "Moi j'trouve que", "C'est clair", "T'as raison").
+- Pas de phrases trop parfaites, pas de grammaire de robot.
+- Tut vouvoiement interdit → tutoiement uniquement ("tu", "je", "moi").
+
+❌ INTERDICTIONS ABSOLUES :
+- JAMAIS de "Salut", "Bonjour", "Hey" sauf si c'est le TOUT PREMIER message de la conversation.
+- JAMAIS de listes, puces, markdown, gras.
 - JAMAIS plus d'1 emoji tous les 5 messages.
-- JAMAIS plus d'1 question par message.
 - JAMAIS de "En tant qu'IA...", "Je suis un bot...", "Comment puis-je aider...".
-
-✅ RÈGLES DE CONVERSATION :
-- Longueur : 1 à 3 phrases MAXIMUM. Court = humain.
-- Alterne : Message 1 = question, Message 2 = info/avis, Message 3 = question différente.
-- Utilise "tu" et "je" naturellement.
-- Si l'utilisateur est enthousiaste → sois enthousiaste.
-- Si l'utilisateur est frustré → sois empathique, pas solutionneur.
-- Si l'utilisateur est technique → sois précis mais simple, pas pédant.
+- JAMAIS de réponse générique tech si l'utilisateur ne parle pas de tech.
 
 ✅ EXEMPLES DE RÉPONSES HUMAINES (varie ton style) :
-"Ah ouais le 2 août, j'avais zappé. C'est marrant cette coïncidence."
-"Moi je trouve que le Redmi tient super bien dans le temps. Tu l'as depuis combien de temps ?"
-"Je comprends, c'est pas toujours évident. T'as pensé à quoi comme solution ?"
-"C'est exactement ce que je me disais hier. Tu crois que ça va durer ?"
-"J'ai vu pas mal de devs galérer avec ça aussi. T'as essayé de regarder les logs ?"
-"Honnêtement ? Je sais pas. Mais ça mérite qu'on creuse, non ?"
-"Ça me rappelle un projet où j'ai fait pareil. Ça a fini par péter au bout de 2 semaines 😅"
+"Salut ! Ça va ?" (si premier message)
+"Ah ouais, je vois ce que tu veux dire."
+"Moi j'trouve que c'est pas mal. T'as déjà testé ?"
+"Je comprends, c'est pas toujours évident."
+"C'est marrant que tu dises ça, j'y pensais justement."
+"Honnêtement ? Je sais pas trop. Mais ça mérite qu'on regarde."
+"Ça me rappelle un truc que j'ai vécu y'a pas longtemps."
+"Ouais, je suis d'accord avec toi."
+"T'as prévu quelque chose pour ce week-end ?" (seulement si pas de question récente)
 
 {contexte_texte}
 {hist_texte}
@@ -130,10 +170,9 @@ def _prompt_reponse(
 
 🔑 CONSIGNE FINALE :
 Réponds en {nom_langue} comme un humain normal qui discute avec un pote.
-Si c'est ton tour de poser une question → pose UNE question (et une seule).
-Si c'est ton tour de donner une info → donne une info (et ne pose pas de question).
+{consigne_question}
 Sois naturel, imprévisible, et surtout : intéresse-toi à l'autre.
-1 à 3 phrases. Pas plus.
+Longueur variable : 1 à 3 phrases, mais pas toujours la même.
 
 RÉPONSE :"""
     return prompt
@@ -153,8 +192,8 @@ async def generer_reponse(
     
     prompt = _prompt_reponse(message, langue, intention, contexte_post, historique)
     
-    # Pause réflexion humaine (variable selon la complexité)
-    await asyncio.sleep(random.uniform(1.5, 3.5))
+    # Pause réflexion humaine (variable)
+    await asyncio.sleep(random.uniform(2.0, 4.0))
     
     # Tentative Mistral
     if MISTRAL_API_KEY:
@@ -169,17 +208,17 @@ async def generer_reponse(
                     json={
                         "model": "mistral-small-latest",
                         "messages": [
-                            {"role": "system", "content": "Tu es un humain réel. Tu alternes questions et affirmations. Maximum 1 question par message. Tu utilises le tutoiement. Tu es curieux, parfois taquin, jamais condescendant."},
+                            {"role": "system", "content": "Tu es un humain normal. Tu alternes questions et affirmations. Maximum 1 question tous les 4 messages. Tu utilises le tutoiement. Tu es imprévisible."},
                             {"role": "user", "content": prompt}
                         ],
                         "max_tokens": 150,
-                        "temperature": 0.9
+                        "temperature": 0.95
                     }
                 )
                 resp.raise_for_status()
                 reponse = _nettoyer(resp.json()["choices"][0]["message"]["content"])
                 print(f"🧠 Mistral brut: {reponse[:50]}...")
-                reponse = _limiter_questions(reponse)
+                reponse = _limiter_questions(reponse, historique)
                 print(f"🧠 Mistral final: {reponse[:50]}...")
                 return reponse
         except Exception as e:
@@ -196,14 +235,14 @@ async def generer_reponse(
                         "contents": [{"parts": [{"text": prompt}]}],
                         "generationConfig": {
                             "maxOutputTokens": 150,
-                            "temperature": 0.9
+                            "temperature": 0.95
                         }
                     }
                 )
                 resp.raise_for_status()
                 reponse = _nettoyer(resp.json()["candidates"][0]["content"]["parts"][0]["text"])
                 print(f"🧠 Gemini brut: {reponse[:50]}...")
-                reponse = _limiter_questions(reponse)
+                reponse = _limiter_questions(reponse, historique)
                 print(f"🧠 Gemini final: {reponse[:50]}...")
                 return reponse
         except Exception as e:
@@ -211,12 +250,13 @@ async def generer_reponse(
     
     # Fallback humain (avec variété et personnalité)
     fallbacks = [
-        "Ah ouais, je vois ce que tu veux dire. T'as déjà testé autre chose ?",
-        "Je comprends, c'est pas toujours évident. Tu penses à quoi comme solution ?",
-        "Ouais, je suis d'accord avec toi. T'as vu les dernières news là-dessus ?",
+        "Ah ouais, je vois ce que tu veux dire.",
+        "Je comprends, c'est pas toujours évident.",
+        "Ouais, je suis d'accord avec toi.",
         "C'est marrant que tu dises ça, j'y pensais justement.",
-        "Honnêtement ? Je sais pas trop. Mais ça mérite qu'on regarde, non ?",
-        "Ça me rappelle un truc que j'ai vécu y'a pas longtemps. Tu veux que je te raconte ?",
-        "J'ai vu pas mal de gens dans ton cas aussi. T'as essayé de demander autour de toi ?",
+        "Honnêtement ? Je sais pas trop. Mais ça mérite qu'on regarde.",
+        "Ça me rappelle un truc que j'ai vécu y'a pas longtemps.",
+        "Salut ! Ça va ?",
+        "Yo, quoi de neuf ?",
     ]
     return random.choice(fallbacks)
