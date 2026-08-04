@@ -1,10 +1,9 @@
 """
 NB — Génération de réponses IA (Mistral → Gemini).
-CORRECTIONS MAJEURES :
-- Anti-répétition stricte (mémoire des 5 derniers messages)
+CORRECTIONS CRITIQUES :
 - Réponse directe obligatoire aux questions
+- Anti-répétition stricte (mémoire des 5 derniers messages)
 - Un seul message par tour (pas de rafale)
-- Mémoire conversationnelle réelle
 """
 import re
 import asyncio
@@ -29,7 +28,7 @@ def _nettoyer(texte: str) -> str:
 
 def _verifier_repetition(texte: str) -> bool:
     """Vérifie si le texte a déjà été envoyé récemment."""
-    texte_clean = texte.lower().strip()[:50]  # Compare les 50 premiers caractères
+    texte_clean = texte.lower().strip()[:50]
     for ancienne in _dernieres_reponses[-5:]:
         if texte_clean in ancienne.lower() or ancienne.lower()[:50] in texte_clean:
             return True
