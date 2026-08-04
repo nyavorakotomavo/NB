@@ -1,9 +1,9 @@
 """
 NB — Génération de réponses IA (Mistral → Gemini).
 CORRECTIONS :
-- Réponse sérieuse aux questions pro (pas de Nolan)
-- Mémoire du contexte (pro vs casual)
-- Vérité terrain (ne jamais mentir sur les offres)
+- Respect des signaux d'arrêt (au revoir, non, je sais pas)
+- Ton humain réel (court, direct, parfois sec)
+- Pas de pseudo-psychanalyse
 - Anti-répétition stricte
 """
 import re
@@ -61,37 +61,48 @@ def _prompt_reponse(
     hist_texte = _construire_historique(historique)
     contexte_texte = f"\n📌 CONTEXTE DU POST : « {contexte_post[:150]} »\n" if contexte_post else ""
     
-    # Détecter le contexte de la conversation
     contexte_conv = detecter_contexte_conversation(historique)
     
-    # 🚨 CONSIGNE SPÉCIALE POUR QUESTIONS PRO
-    if intention == "question_pro":
+    # 🛑 CONSIGNE SPÉCIALE POUR SIGNAUX D'ARRÊT
+    if intention == "signal_arret":
+        consigne_speciale = """
+🛑 SIGNAL D'ARRÊT DÉTECTÉ :
+L'utilisateur veut finir la conversation.
+- Réponds TRÈS COURT (1 phrase max).
+- Ne pose PAS de question.
+- Ne relance PAS.
+- Exemple : "À plus !", "Ok, à la prochaine.", "Cool, bonne continuation."
+"""
+    elif intention == "reponse_courte":
+        consigne_speciale = """
+🚫 RÉPONSE COURTE/NÉGATIVE DÉTECTÉE :
+L'utilisateur a répondu "non", "je sais pas", "ok", etc.
+- Ne pose PAS de question.
+- Ne fais PAS de pseudo-psychanalyse ("t'as l'air d'hésiter", "la chaleur...").
+- Sois court et direct.
+- Exemple : "Ok, je vois.", "Pas de souci.", "Cool."
+"""
+    elif intention == "question_pro":
         consigne_speciale = f"""
-🚨 ALERTE QUESTION PROFESSIONNELLE :
-L'utilisateur pose une question sur la page, l'abonnement, les concurrents, ou les offres.
-Tu DOIS répondre sérieusement et honnêtement.
-
+🚨 QUESTION PROFESSIONNELLE :
 {PAGE_OFFRE_REELLE}
-
-RÈGLES ABSOLUES :
-- Ne parle PAS de films, de Nolan, de glace, ou de sujets casual.
-- Ne mens JAMAIS sur les fonctionnalités (pas de lives payants, pas d'abonnement 2€).
-- Donne 2-3 arguments concrets sur ce qui existe VRAIMENT.
-- Sois professionnel mais humain.
+- Réponds sérieusement et honnêtement.
+- Ne mens JAMAIS sur les fonctionnalités.
+- Donne 2-3 arguments concrets.
 """
     elif contexte_conv == "pro":
         consigne_speciale = """
 ✅ MODE PROFESSIONNEL :
-La conversation est sérieuse. Reste dans le contexte tech/business.
-Ne dévie PAS vers des sujets casual (films, week-end, glace).
-Réponds aux questions directement.
+Reste dans le contexte tech/business.
+Ne dévie PAS vers des sujets casual.
 """
     else:
         consigne_speciale = """
 ✅ MODE CONVERSATION NORMALE :
-Alterne entre donner une info/avis et poser UNE question.
-Sois imprévisible : parfois court, parfois avec une anecdote.
-Ne parle PAS de tech sauf si l'utilisateur en parle.
+- Sois court, direct, parfois même un peu sec.
+- Ne pose PAS de question à chaque message.
+- Ne fais JAMAIS de pseudo-psychanalyse.
+- Parfois réponds juste par "Ouais", "Ok", "Je vois".
 """
     
     memoire_texte = ""
@@ -111,17 +122,17 @@ Ne parle PAS de tech sauf si l'utilisateur en parle.
 🎯 RÈGLES ABSOLUES :
 1. UNE SEULE RÉPONSE : Tu envoies UN SEUL message.
 2. PAS DE RÉPÉTITION : Ne redis jamais ce que tu viens de dire.
-3. LONGUEUR VARIABLE : 1 à 3 phrases.
-4. TON NATUREL : Utilise "tu", "je", des expressions naturelles.
-5. VÉRITÉ TERRAIN : Ne mens JAMAIS sur les offres de la page.
-6. CONTEXTE : Si l'utilisateur dit "j'aime pas les films", ne parle plus de films.
+3. TON HUMAIN RÉEL : Court, direct, parfois sec. Pas de phrases trop parfaites.
+4. PAS DE PSYCHANALYSE : Ne dis JAMAIS "t'as l'air de...", "tu sembles...", "c'est la chaleur...".
+5. RESPECTE LES SIGNAUX : Si l'utilisateur dit "non", "au revoir", "je sais pas" → arrête de relancer.
+6. VÉRITÉ TERRAIN : Ne mens JAMAIS sur les offres de la page.
 
 ❌ INTERDICTIONS :
 - JAMAIS de "Salut/Bonjour/Yo" sauf si c'est le TOUT PREMIER message.
 - JAMAIS de listes, markdown, gras.
 - JAMAIS plus d'1 emoji tous les 5 messages.
 - JAMAIS de "En tant qu'IA...", "Je suis un bot...".
-- JAMAIS de mensonge sur les fonctionnalités.
+- JAMAIS de pseudo-psychanalyse.
 
 {contexte_texte}
 {hist_texte}
@@ -130,9 +141,11 @@ Ne parle PAS de tech sauf si l'utilisateur en parle.
 
 🔑 CONSIGNE FINALE :
 Réponds en {nom_langue} comme un humain normal.
-Si c'est une question pro → réponds sérieusement avec la vérité terrain.
-Si c'est conversation → sois naturel et imprévisible.
-UN SEUL MESSAGE. Pas de répétition.
+Si signal d'arrêt → très court, pas de question.
+Si réponse courte → pas de question, pas de psychanalyse.
+Si question pro → réponse sérieuse.
+Sinon → court, direct, imprévisible.
+UN SEUL MESSAGE.
 
 RÉPONSE :"""
     return prompt
@@ -163,11 +176,11 @@ async def generer_reponse(
                     json={
                         "model": "mistral-small-latest",
                         "messages": [
-                            {"role": "system", "content": "Tu es un humain normal. Tu réponds sérieusement aux questions pro. Tu ne mens jamais sur les offres. Tu ne répètes jamais tes dernières phrases."},
+                            {"role": "system", "content": "Tu es un humain normal. Tu es court, direct, parfois sec. Tu ne fais jamais de psychanalyse. Tu respectes les signaux d'arrêt."},
                             {"role": "user", "content": prompt}
                         ],
-                        "max_tokens": 150,
-                        "temperature": 0.85
+                        "max_tokens": 100,
+                        "temperature": 0.8
                     }
                 )
                 resp.raise_for_status()
@@ -175,11 +188,7 @@ async def generer_reponse(
                 
                 if _verifier_repetition(reponse):
                     print(f"🔁 Répétition détectée, fallback...")
-                    reponse = random.choice([
-                        "Ah ouais, je vois ce que tu veux dire.",
-                        "Je comprends, c'est pas toujours évident.",
-                        "Ouais, je suis d'accord avec toi.",
-                    ])
+                    reponse = random.choice(["Ok.", "Je vois.", "Cool.", "Pas de souci."])
                 
                 _ajouter_memoire(reponse)
                 print(f"🧠 Mistral final: {reponse[:60]}...")
@@ -196,8 +205,8 @@ async def generer_reponse(
                     json={
                         "contents": [{"parts": [{"text": prompt}]}],
                         "generationConfig": {
-                            "maxOutputTokens": 150,
-                            "temperature": 0.85
+                            "maxOutputTokens": 100,
+                            "temperature": 0.8
                         }
                     }
                 )
@@ -206,10 +215,7 @@ async def generer_reponse(
                 
                 if _verifier_repetition(reponse):
                     print(f"🔁 Répétition détectée, fallback...")
-                    reponse = random.choice([
-                        "Ah ouais, je vois ce que tu veux dire.",
-                        "Je comprends, c'est pas toujours évident.",
-                    ])
+                    reponse = random.choice(["Ok.", "Je vois.", "Cool."])
                 
                 _ajouter_memoire(reponse)
                 print(f"🧠 Gemini final: {reponse[:60]}...")
@@ -217,11 +223,7 @@ async def generer_reponse(
         except Exception as e:
             print(f"⚠️  Gemini échoué : {e}")
     
-    fallbacks = [
-        "Ah ouais, je vois ce que tu veux dire.",
-        "Je comprends, c'est pas toujours évident.",
-        "Ouais, je suis d'accord avec toi.",
-    ]
+    fallbacks = ["Ok.", "Je vois.", "Cool.", "Pas de souci.", "À plus !"]
     reponse = random.choice(fallbacks)
     _ajouter_memoire(reponse)
     return reponse
