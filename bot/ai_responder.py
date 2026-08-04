@@ -1,7 +1,10 @@
 """
 NB — Génération de réponses IA (Mistral → Gemini).
-Personnalité : Humain réel, imprévisible, jamais tech-forcé.
-Règles : 1 question tous les 4 messages, longueur variable, ton naturel.
+CORRECTIONS MAJEURES :
+- Anti-répétition stricte (mémoire des 5 derniers messages)
+- Réponse directe obligatoire aux questions
+- Un seul message par tour (pas de rafale)
+- Mémoire conversationnelle réelle
 """
 import re
 import asyncio
@@ -13,6 +16,9 @@ from bot.config import (
 )
 from bot.language_detector import NOM_LANGUE
 
+# 🧠 Mémoire anti-répétition : stocke les 5 dernières réponses du bot
+_dernieres_reponses: list[str] = []
+
 def _nettoyer(texte: str) -> str:
     """Nettoie le texte des caractères invisibles et du formatage."""
     texte = re.sub(r'[\u200e\u200f\u200b\u200c\u200d\ufeff\u00ad\u2060\u180e\u202a-\u202e\u2066-\u2069]', '', texte)
@@ -21,67 +27,19 @@ def _nettoyer(texte: str) -> str:
     texte = re.sub(r'^[-•]\s*', '', texte, flags=re.MULTILINE)
     return texte.strip()
 
-def _compter_questions_dans_historique(historique: list[dict]) -> int:
-    """Compte le nombre de questions posées par le bot dans les 4 derniers messages."""
-    questions = 0
-    for msg in historique[-4:]:
-        if msg.get('role') == 'bot':
-            contenu = msg.get('contenu', '')
-            if '?' in contenu or '？' in contenu:
-                questions += 1
-    return questions
+def _verifier_repetition(texte: str) -> bool:
+    """Vérifie si le texte a déjà été envoyé récemment."""
+    texte_clean = texte.lower().strip()[:50]  # Compare les 50 premiers caractères
+    for ancienne in _dernieres_reponses[-5:]:
+        if texte_clean in ancienne.lower() or ancienne.lower()[:50] in texte_clean:
+            return True
+    return False
 
-def _limiter_questions(texte: str, historique: list[dict]) -> str:
-    """
-    POST-TRAITEMENT : 1 question maximum tous les 4 messages.
-    Si le bot a déjà posé une question récemment → transformer en affirmation.
-    """
-    if not texte:
-        return texte
-    
-    questions_recentes = _compter_questions_dans_historique(historique)
-    nb_questions_actuelles = texte.count('?') + texte.count('？')
-    
-    # Si déjà 1+ question dans les 4 derniers messages → PAS de nouvelle question
-    if questions_recentes >= 1 and nb_questions_actuelles > 0:
-        print(f"🔪 Trop de questions récentes ({questions_recentes}), suppression...")
-        phrases = re.split(r'(?<=[.!?]) +', texte)
-        phrases_propres = []
-        for phrase in phrases:
-            if not phrase.strip():
-                continue
-            if '?' in phrase or '？' in phrase:
-                phrase_sans_question = re.sub(r'\?[^.!?]*$', '', phrase).strip()
-                if phrase_sans_question:
-                    phrases_propres.append(phrase_sans_question + '.')
-            else:
-                phrases_propres.append(phrase.strip())
-        return ' '.join(phrases_propres)
-    
-    # Sinon : limiter à 1 question max dans ce message
-    if nb_questions_actuelles <= 1:
-        return texte
-    
-    print(f"🔪 Trop de questions dans ce message ({nb_questions_actuelles}), réduction à 1...")
-    phrases = re.split(r'(?<=[.!?]) +', texte)
-    phrases_propres = []
-    question_deja_presente = False
-    
-    for phrase in phrases:
-        if not phrase.strip():
-            continue
-        if '?' in phrase or '？' in phrase:
-            if not question_deja_presente:
-                phrases_propres.append(phrase.strip())
-                question_deja_presente = True
-            else:
-                phrase_sans_question = re.sub(r'\?[^.!?]*$', '', phrase).strip()
-                if phrase_sans_question:
-                    phrases_propres.append(phrase_sans_question + '.')
-        else:
-            phrases_propres.append(phrase.strip())
-    
-    return ' '.join(phrases_propres)
+def _ajouter_memoire(texte: str) -> None:
+    """Ajoute la réponse à la mémoire anti-répétition."""
+    _dernieres_reponses.append(texte)
+    if len(_dernieres_reponses) > 5:
+        _dernieres_reponses.pop(0)
 
 def _construire_historique(historique: list[dict]) -> str:
     """Construit un résumé de l'historique pour le prompt."""
@@ -102,77 +60,72 @@ def _prompt_reponse(
     historique: list[dict]
 ) -> str:
     """
-    Construit le prompt avec personnalité 100% HUMAINE.
+    Construit le prompt avec logique de réponse directe + anti-répétition.
     """
     nom_langue = NOM_LANGUE.get(langue, "français")
     date_actuelle = get_current_date()
     hist_texte = _construire_historique(historique)
     contexte_texte = f"\n📌 CONTEXTE DU POST : « {contexte_post[:150]} »\n" if contexte_post else ""
     
-    # Compter les questions récentes pour adapter le prompt
-    questions_recentes = _compter_questions_dans_historique(historique)
-    consigne_question = "NE POSE PAS DE QUESTION cette fois-ci. Donne juste ton avis ou une info." if questions_recentes >= 1 else "Tu peux poser UNE question (et une seule) si tu veux relancer la conversation."
-
-    prompt = f"""Tu es {BOT_NAME}, un humain normal qui discute sur Messenger. Tu n'es PAS un assistant, PAS un bot, PAS une IA. Tu es un pote curieux, parfois taquin, toujours sincère.
+    # 🚨 CONSIGNE SPÉCIALE POUR QUESTIONS DIRECTES
+    if intention == "question_directe":
+        consigne_speciale = """
+🚨 ALERTE QUESTION DIRECTE :
+L'utilisateur pose une question explicite. Tu DOIS y répondre directement et complètement.
+- Ne relance PAS avec une autre question.
+- Ne change PAS de sujet.
+- Donne une réponse claire, utile, et honnête.
+- Si c'est une question business ("pourquoi m'abonner ?"), donne 2-3 arguments concrets.
+- Si tu ne sais pas, dis-le honnêtement au lieu de dévier.
+"""
+    else:
+        consigne_speciale = """
+✅ MODE CONVERSATION NORMALE :
+- Alterne entre donner une info/avis et poser UNE question.
+- Sois imprévisible : parfois court, parfois avec une anecdote.
+- Ne parle PAS de tech sauf si l'utilisateur en parle.
+"""
+    
+    # 🧠 MÉMOIRE ANTI-RÉPÉTITION
+    memoire_texte = ""
+    if _dernieres_reponses:
+        memoire_texte = "\n🚫 TES 5 DERNIÈRES RÉPONSES (NE LES RÉPÈTE PAS) :\n"
+        for i, rep in enumerate(_dernieres_reponses[-5:], 1):
+            memoire_texte += f"{i}. {rep[:80]}...\n"
+    
+    prompt = f"""Tu es {BOT_NAME}, un humain normal qui discute sur Messenger. Tu n'es PAS un assistant, PAS un bot.
 
 📅 DATE ACTUELLE : {date_actuelle}
 
-🎯 TA PERSONNALITÉ (100% HUMAINE) :
+{consigne_speciale}
 
-✅ TU ES IMPRÉVISIBLE :
-- Parfois tu poses une question, parfois tu donnes juste une info.
-- Parfois tu es enthousiaste, parfois réfléchi, parfois taquin.
-- Ne tombe JAMAIS dans le pattern "question → réponse → question".
+{memoire_texte}
 
-✅ TU PARLES DE TOUT, PAS QUE DE TECH :
-- Si l'utilisateur dit "salut", réponds naturellement ("Salut ! Ça va ?" ou "Yo, quoi de neuf ?").
-- Si l'utilisateur dit "juste discuter", parle de la vie, du week-end, d'un film, d'une anecdote.
-- NE FORCE PAS le sujet tech sauf si l'utilisateur en parle explicitement.
+🎯 RÈGLES ABSOLUES :
+1. UNE SEULE RÉPONSE : Tu envoies UN SEUL message, pas plusieurs bulles.
+2. PAS DE RÉPÉTITION : Ne redis jamais ce que tu viens de dire (voir liste ci-dessus).
+3. LONGUEUR VARIABLE : 1 à 3 phrases, mais pas toujours la même longueur.
+4. TON NATUREL : Utilise "tu", "je", des expressions naturelles ("Ah ouais", "Moi j'trouve que").
+5. PAS DE TECH FORCÉ : Ne parle pas de GPU, Redmi, pilotes NVIDIA sauf si l'utilisateur en parle.
+6. PAS DE PSYCHANALYSE : Ne dis pas "t'as l'air de bloquer", "t'es dans tel état".
 
-✅ LONGUEUR VARIABLE (comme un vrai humain) :
-- Parfois 1 phrase courte ("Ouais, je vois.")
-- Parfois 2 phrases moyennes ("Ah ouais, c'est marrant. J'ai vécu pareil y'a pas longtemps.")
-- Parfois 3 phrases si tu as une anecdote à raconter.
-- JAMAIS toujours la même longueur.
-
-✅ 1 QUESTION TOUS LES 4 MESSAGES :
-- Regarde l'historique : si tu as déjà posé une question récemment → NE POSE PAS DE QUESTION.
-- Donne ton avis, partage une info, raconte une anecdote.
-- {consigne_question}
-
-✅ TON NATUREL EN {nom_langue.upper()} :
-- Utilise des expressions naturelles ("Ah ouais", "Moi j'trouve que", "C'est clair", "T'as raison").
-- Pas de phrases trop parfaites, pas de grammaire de robot.
-- Tut vouvoiement interdit → tutoiement uniquement ("tu", "je", "moi").
-
-❌ INTERDICTIONS ABSOLUES :
-- JAMAIS de "Salut", "Bonjour", "Hey" sauf si c'est le TOUT PREMIER message de la conversation.
-- JAMAIS de listes, puces, markdown, gras.
+❌ INTERDICTIONS :
+- JAMAIS de "Salut/Bonjour/Yo" sauf si c'est le TOUT PREMIER message.
+- JAMAIS de listes, markdown, gras.
 - JAMAIS plus d'1 emoji tous les 5 messages.
-- JAMAIS de "En tant qu'IA...", "Je suis un bot...", "Comment puis-je aider...".
-- JAMAIS de réponse générique tech si l'utilisateur ne parle pas de tech.
-
-✅ EXEMPLES DE RÉPONSES HUMAINES (varie ton style) :
-"Salut ! Ça va ?" (si premier message)
-"Ah ouais, je vois ce que tu veux dire."
-"Moi j'trouve que c'est pas mal. T'as déjà testé ?"
-"Je comprends, c'est pas toujours évident."
-"C'est marrant que tu dises ça, j'y pensais justement."
-"Honnêtement ? Je sais pas trop. Mais ça mérite qu'on regarde."
-"Ça me rappelle un truc que j'ai vécu y'a pas longtemps."
-"Ouais, je suis d'accord avec toi."
-"T'as prévu quelque chose pour ce week-end ?" (seulement si pas de question récente)
+- JAMAIS de "En tant qu'IA...", "Je suis un bot...".
+- JAMAIS de "Ah tu m'as démasqué" ou aveu de script.
 
 {contexte_texte}
 {hist_texte}
 
-📩 DERNIER MESSAGE DE L'UTILISATEUR : "{message}"
+📩 MESSAGE DE L'UTILISATEUR : "{message}"
 
 🔑 CONSIGNE FINALE :
-Réponds en {nom_langue} comme un humain normal qui discute avec un pote.
-{consigne_question}
-Sois naturel, imprévisible, et surtout : intéresse-toi à l'autre.
-Longueur variable : 1 à 3 phrases, mais pas toujours la même.
+Réponds en {nom_langue} comme un humain normal.
+Si c'est une question → réponds directement.
+Si c'est conversation → sois naturel et imprévisible.
+UN SEUL MESSAGE. Pas de répétition.
 
 RÉPONSE :"""
     return prompt
@@ -185,14 +138,14 @@ async def generer_reponse(
     historique: list[dict] | None = None
 ) -> str:
     """
-    Génère une réponse via Mistral ou Gemini.
+    Génère une réponse via Mistral ou Gemini avec anti-répétition.
     """
     if historique is None:
         historique = []
     
     prompt = _prompt_reponse(message, langue, intention, contexte_post, historique)
     
-    # Pause réflexion humaine (variable)
+    # Pause réflexion humaine
     await asyncio.sleep(random.uniform(2.0, 4.0))
     
     # Tentative Mistral
@@ -208,18 +161,29 @@ async def generer_reponse(
                     json={
                         "model": "mistral-small-latest",
                         "messages": [
-                            {"role": "system", "content": "Tu es un humain normal. Tu alternes questions et affirmations. Maximum 1 question tous les 4 messages. Tu utilises le tutoiement. Tu es imprévisible."},
+                            {"role": "system", "content": "Tu es un humain normal. Tu réponds directement aux questions. Tu ne répètes jamais tes dernières phrases. Tu envoies un seul message."},
                             {"role": "user", "content": prompt}
                         ],
                         "max_tokens": 150,
-                        "temperature": 0.95
+                        "temperature": 0.9
                     }
                 )
                 resp.raise_for_status()
                 reponse = _nettoyer(resp.json()["choices"][0]["message"]["content"])
-                print(f"🧠 Mistral brut: {reponse[:50]}...")
-                reponse = _limiter_questions(reponse, historique)
-                print(f"🧠 Mistral final: {reponse[:50]}...")
+                
+                # 🚫 ANTI-RÉPÉTITION : si déjà dit, régénère avec fallback
+                if _verifier_repetition(reponse):
+                    print(f"🔁 Répétition détectée, fallback...")
+                    reponse = random.choice([
+                        "Ah ouais, je vois ce que tu veux dire.",
+                        "Je comprends, c'est pas toujours évident.",
+                        "Ouais, je suis d'accord avec toi.",
+                        "C'est marrant que tu dises ça, j'y pensais justement.",
+                        "Honnêtement ? Je sais pas trop. Mais ça mérite qu'on regarde.",
+                    ])
+                
+                _ajouter_memoire(reponse)
+                print(f"🧠 Mistral final: {reponse[:60]}...")
                 return reponse
         except Exception as e:
             print(f"⚠️  Mistral échoué : {e}")
@@ -235,28 +199,34 @@ async def generer_reponse(
                         "contents": [{"parts": [{"text": prompt}]}],
                         "generationConfig": {
                             "maxOutputTokens": 150,
-                            "temperature": 0.95
+                            "temperature": 0.9
                         }
                     }
                 )
                 resp.raise_for_status()
                 reponse = _nettoyer(resp.json()["candidates"][0]["content"]["parts"][0]["text"])
-                print(f"🧠 Gemini brut: {reponse[:50]}...")
-                reponse = _limiter_questions(reponse, historique)
-                print(f"🧠 Gemini final: {reponse[:50]}...")
+                
+                if _verifier_repetition(reponse):
+                    print(f"🔁 Répétition détectée, fallback...")
+                    reponse = random.choice([
+                        "Ah ouais, je vois ce que tu veux dire.",
+                        "Je comprends, c'est pas toujours évident.",
+                        "Ouais, je suis d'accord avec toi.",
+                    ])
+                
+                _ajouter_memoire(reponse)
+                print(f"🧠 Gemini final: {reponse[:60]}...")
                 return reponse
         except Exception as e:
             print(f"⚠️  Gemini échoué : {e}")
     
-    # Fallback humain (avec variété et personnalité)
+    # Fallback ultime
     fallbacks = [
         "Ah ouais, je vois ce que tu veux dire.",
         "Je comprends, c'est pas toujours évident.",
         "Ouais, je suis d'accord avec toi.",
         "C'est marrant que tu dises ça, j'y pensais justement.",
-        "Honnêtement ? Je sais pas trop. Mais ça mérite qu'on regarde.",
-        "Ça me rappelle un truc que j'ai vécu y'a pas longtemps.",
-        "Salut ! Ça va ?",
-        "Yo, quoi de neuf ?",
     ]
-    return random.choice(fallbacks)
+    reponse = random.choice(fallbacks)
+    _ajouter_memoire(reponse)
+    return reponse
