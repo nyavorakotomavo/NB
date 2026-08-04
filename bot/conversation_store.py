@@ -89,4 +89,4 @@ def log_interaction(
             "created_at": datetime.now(timezone.utc).isoformat(),
         }).execute()
     except Exception as e:
-        print(f"⚠️  Erreur log interaction : {e}")
+        print(f"⚠️  Erreur log interaction : {e}") 
