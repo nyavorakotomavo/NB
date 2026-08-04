@@ -1,9 +1,10 @@
 """
 NB — Serveur FastAPI (webhook Facebook).
 CORRECTIONS :
-- Anti-rafale : UN SEUL message par utilisateur par cycle
-- Décalage aléatoire entre chaque utilisateur (8-15s)
-- Pause café toutes les 3 réponses (15-25s)
+- UN SEUL message par tour (pas de rafale)
+- Délai humain réaliste (15-45s selon longueur)
+- Cache anti-doublon strict (60s)
+- Pause café toutes les 3 réponses
 """
 import time
 import asyncio
@@ -36,16 +37,12 @@ print("=" * 50)
 
 app = FastAPI(title=f"{BOT_NAME} — Nyavodroid Bot")
 
-# Cache pour éviter de répondre plusieurs fois aux réactions d'un même post
 _reactions_traitees: set[str] = set()
-
-# Cache anti-rafale : UN message par utilisateur par 30 secondes
 _derniers_traitements: dict[str, float] = {}
-_CACHE_TRAITEMENT = 30.0
+_CACHE_TRAITEMENT = 60.0  # 60 secondes entre deux traitements du même utilisateur
 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
-    """Facebook envoie un GET pour vérifier l'URL du webhook."""
     params = request.query_params
     mode = params.get("hub.mode")
     token = params.get("hub.verify_token")
@@ -59,11 +56,9 @@ async def verify_webhook(request: Request):
 
 @app.post("/webhook")
 async def handle_webhook(request: Request):
-    """Reçoit et traite les événements Facebook."""
     body = await request.body()
     print("📨 REQUETE POST RECUE")
     
-    # Vérifier la signature Facebook
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not verifier_signature(body, signature):
         print("❌ Signature invalide")
@@ -76,11 +71,10 @@ async def handle_webhook(request: Request):
     compteur_utilisateurs = 0
     
     for entry in data.get("entry", []):
-        # Messages Messenger
         for messaging in entry.get("messaging", []):
             sender_id = messaging.get("sender", {}).get("id", "")
             
-            # Anti-rafale : UN message par utilisateur par 30s
+            # 🚫 ANTI-SPAM : Un seul traitement par utilisateur par 60s
             if sender_id in _derniers_traitements:
                 temps_ecoule = time.time() - _derniers_traitements[sender_id]
                 if temps_ecoule < _CACHE_TRAITEMENT:
@@ -92,15 +86,14 @@ async def handle_webhook(request: Request):
             _derniers_traitements[sender_id] = time.time()
             compteur_utilisateurs += 1
             
-            # Décalage entre chaque utilisateur (8-15s)
+            # Délai entre chaque utilisateur (8-15s)
             await asyncio.sleep(random.uniform(8.0, 15.0))
             
-            # Pause café toutes les 3 réponses (15-25s)
+            # Pause café toutes les 3 réponses
             if compteur_utilisateurs % 3 == 0:
                 print("☕ Pause café...")
                 await asyncio.sleep(random.uniform(15.0, 25.0))
         
-        # Feed (commentaires + réactions)
         for change in entry.get("changes", []):
             value = change.get("value", {})
             item = value.get("item", "")
@@ -109,7 +102,6 @@ async def handle_webhook(request: Request):
             if item == "comment":
                 comment_id = value.get("comment_id", "")
                 
-                # Anti-rafale commentaires
                 if comment_id in _derniers_traitements:
                     temps_ecoule = time.time() - _derniers_traitements[comment_id]
                     if temps_ecoule < _CACHE_TRAITEMENT:
@@ -131,7 +123,6 @@ async def handle_webhook(request: Request):
     return {"status": "ok"}
 
 async def _gerer_message(messaging: dict) -> None:
-    """Traite un message Messenger entrant."""
     sender_id = messaging.get("sender", {}).get("id", "")
     message_data = messaging.get("message", {})
     texte = message_data.get("text", "")
@@ -142,22 +133,16 @@ async def _gerer_message(messaging: dict) -> None:
     print(f"📩 Message de {sender_id}: {texte[:50]}...")
     t0 = time.time()
     
-    # Analyse
     langue = detecter_langue(texte)
     intention = analyser_intention(texte)
     
-    # Ignorer le spam
     if intention == "spam":
         print(f"🚫 Spam ignoré de {sender_id}")
         return
     
-    # Historique
     historique = get_historique(sender_id, "messenger")
-    
-    # Sauvegarder le message entrant
     sauvegarder_message(sender_id, "messenger", "user", texte, langue)
     
-    # Générer la réponse
     reponse = await generer_reponse(
         message=texte,
         langue=langue,
@@ -165,19 +150,16 @@ async def _gerer_message(messaging: dict) -> None:
         historique=historique,
     )
     
-    # Envoyer avec délai humain (géré dans fb_client)
+    # ✅ UN SEUL MESSAGE avec délai humain
     await envoyer_message_humain(sender_id, reponse, type_envoi="message")
     
-    # Sauvegarder la réponse
     sauvegarder_message(sender_id, "messenger", "bot", reponse, langue)
     
-    # Analytics
     temps = time.time() - t0
     log_interaction(sender_id, "message", langue, intention, temps)
     print(f"  💬 Messenger [{langue}/{intention}] → {reponse[:60]}... ({temps:.1f}s)")
 
 async def _gerer_commentaire(value: dict) -> None:
-    """Traite un nouveau commentaire sur un post."""
     verb = value.get("verb", "")
     if verb != "add":
         return
@@ -193,25 +175,17 @@ async def _gerer_commentaire(value: dict) -> None:
     print(f"🗨️  Commentaire de {sender_id}: {texte[:50]}...")
     t0 = time.time()
     
-    # Analyse
     langue = detecter_langue(texte)
     intention = analyser_intention(texte)
     
-    # Ignorer le spam
     if intention == "spam":
         print(f"🚫 Spam ignoré de {sender_id}")
         return
     
-    # Contexte du post
     contexte = await get_post_message(post_id) if post_id else ""
-    
-    # Historique
     historique = get_historique(sender_id, "comment")
-    
-    # Sauvegarder
     sauvegarder_message(sender_id, "comment", "user", texte, langue, post_id)
     
-    # Générer la réponse
     reponse = await generer_reponse(
         message=texte,
         langue=langue,
@@ -220,19 +194,14 @@ async def _gerer_commentaire(value: dict) -> None:
         historique=historique,
     )
     
-    # Envoyer avec délai humain
     await envoyer_message_humain(comment_id, reponse, type_envoi="commentaire")
-    
-    # Sauvegarder
     sauvegarder_message(sender_id, "comment", "bot", reponse, langue, post_id)
     
-    # Analytics
     temps = time.time() - t0
     log_interaction(sender_id, "commentaire", langue, intention, temps, post_id)
     print(f"  🗨️  Commentaire [{langue}/{intention}] → {reponse[:60]}... ({temps:.1f}s)")
 
 async def _gerer_reaction(value: dict) -> None:
-    """Traite une réaction sur un post."""
     verb = value.get("verb", "")
     if verb != "add":
         return
@@ -243,7 +212,6 @@ async def _gerer_reaction(value: dict) -> None:
     if not post_id:
         return
     
-    # Un seul remerciement par post
     if post_id in _reactions_traitees:
         return
     
