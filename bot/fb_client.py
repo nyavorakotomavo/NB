@@ -1,21 +1,23 @@
 """
 NB — Client Facebook Graph API.
-Gestion du délai humain, de l'indicateur de frappe et de l'envoi.
+CORRECTIONS :
+- Délai de frappe calculé selon la longueur du message (50ms/char + variance)
+- Minimum 15s entre réception et réponse
+- Anti-rafale : UN SEUL message par cycle, jamais de doublons
 """
 import asyncio
 import hashlib
 import hmac
 import random
+import time
 import httpx
-
 from bot.config import FB_PAGE_ID, FB_PAGE_ACCESS_TOKEN, FB_APP_SECRET, GRAPH_VERSION
 
 BASE = f"https://graph.facebook.com/{GRAPH_VERSION}"
 
-# Cache pour éviter les doublons (30 secondes)
+# Cache anti-doublons (60 secondes)
 _derniers_messages_envoyes: dict[str, float] = {}
-_CACHE_DUREE = 30.0
-
+_CACHE_DUREE = 60.0
 
 def verifier_signature(payload: bytes, signature: str) -> bool:
     expected = "sha256=" + hmac.new(
@@ -24,7 +26,6 @@ def verifier_signature(payload: bytes, signature: str) -> bool:
         hashlib.sha256
     ).hexdigest()
     return hmac.compare_digest(expected, signature)
-
 
 async def _envoyer_action_frappe(sender_id: str) -> None:
     try:
@@ -37,7 +38,6 @@ async def _envoyer_action_frappe(sender_id: str) -> None:
     except Exception:
         pass
 
-
 async def _desactiver_action_frappe(sender_id: str) -> None:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -49,11 +49,22 @@ async def _desactiver_action_frappe(sender_id: str) -> None:
     except Exception:
         pass
 
+def _calculer_delai_frappe(longueur_texte: int) -> float:
+    """
+    Calcule un délai de frappe réaliste :
+    - Base : 15 secondes minimum (temps de lecture + réflexion)
+    - Frappe : 50ms par caractère + variance aléatoire
+    - Plafond : 45 secondes max
+    """
+    base = 15.0
+    frappe = longueur_texte * 0.05
+    variance = random.uniform(2.0, 8.0)
+    total = base + frappe + variance
+    return min(total, 45.0)
 
 async def repondre_message(sender_id: str, texte: str) -> bool:
     if not texte or not texte.strip():
         return False
-
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -71,7 +82,6 @@ async def repondre_message(sender_id: str, texte: str) -> bool:
         print(f"❌ Erreur envoi: {e}")
         return False
 
-
 async def repondre_commentaire(comment_id: str, texte: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -84,7 +94,6 @@ async def repondre_commentaire(comment_id: str, texte: str) -> bool:
     except Exception:
         return False
 
-
 async def commenter_post(post_id: str, texte: str) -> None:
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -95,7 +104,6 @@ async def commenter_post(post_id: str, texte: str) -> None:
             )
     except Exception:
         pass
-
 
 async def get_post_message(post_id: str) -> str:
     try:
@@ -108,7 +116,6 @@ async def get_post_message(post_id: str) -> str:
             return resp.json().get("message", "")[:300]
     except Exception:
         return ""
-
 
 async def get_derniers_posts() -> list[dict]:
     try:
@@ -126,44 +133,43 @@ async def get_derniers_posts() -> list[dict]:
     except Exception:
         return []
 
-
-# ──────────────────────────────────────────────
-# ENVOI HUMAIN : UN SEUL MESSAGE + CACHE
-# ──────────────────────────────────────────────
 async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "message") -> None:
     """
-    Simule un humain :
-    - Délai de lecture (2-4s)
-    - Typing
-    - Envoi d'UN SEUL message (pas de rafale)
-    - Cache pour éviter les doublons
+    Simule un humain réel :
+    - Vérifie le cache (60s) → pas de doublons
+    - Attend 15s minimum + temps de frappe réaliste
+    - Affiche "en train d'écrire..."
+    - Envoie UN SEUL message
     """
     if not texte or not texte.strip():
         return
-
-    # Vérifier le cache (30 secondes)
+    
+    # Anti-doublons
     clef_cache = f"{sender_id}_{texte[:30]}"
     if clef_cache in _derniers_messages_envoyes:
-        temps_ecoule = asyncio.get_event_loop().time() - _derniers_messages_envoyes[clef_cache]
+        temps_ecoule = time.time() - _derniers_messages_envoyes[clef_cache]
         if temps_ecoule < _CACHE_DUREE:
             print(f"⏭️  Message déjà envoyé il y a {temps_ecoule:.0f}s, ignoré.")
             return
-    _derniers_messages_envoyes[clef_cache] = asyncio.get_event_loop().time()
-
-    # Délai de lecture
-    await asyncio.sleep(random.uniform(2.0, 4.0))
-
-    # Typing
+    
+    _derniers_messages_envoyes[clef_cache] = time.time()
+    
+    # Délai humain réaliste
+    delai = _calculer_delai_frappe(len(texte))
+    print(f"⏳ Délai humain : {delai:.1f}s pour {len(texte)} caractères")
+    await asyncio.sleep(delai)
+    
+    # Typing indicator
     if type_envoi == "message":
         await _envoyer_action_frappe(sender_id)
-        await asyncio.sleep(random.uniform(1.5, 3.0))
-
-    # Envoi d'UN SEUL message
+        await asyncio.sleep(random.uniform(1.0, 2.5))
+    
+    # Envoi UNIQUE
     if type_envoi == "commentaire":
         await repondre_commentaire(sender_id, texte)
     else:
         await repondre_message(sender_id, texte)
-
-    # Désactiver le typing
+    
+    # Stop typing
     if type_envoi == "message":
         await _desactiver_action_frappe(sender_id)
