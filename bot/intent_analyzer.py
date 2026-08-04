@@ -66,4 +66,4 @@ def analyser_intention(texte: str) -> str:
     if not scores:
         return "conversation"
     
-    return max(scores, key=scores.get)
+    return max(scores, key=scores.get) 
