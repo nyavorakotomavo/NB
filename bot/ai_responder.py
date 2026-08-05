@@ -1,10 +1,9 @@
 """
-NB — Génération de réponses IA (Mistral → Gemini).
-CORRECTIONS MAJEURES :
-- Lecture des VRAIS posts publiés (source de vérité Facebook)
-- Ton FORMEL pour les questions pro / CASUAL pour la conversation
-- Anti-répétition stricte + Respect des signaux d'arrêt
-- Plus d'invention de contenu
+NB — Génération de réponses IA.
+CORRECTIONS :
+- Plus de "Je vérifie..." (réponse directe ou admission honnête)
+- Ton cohérent (Pro = Vouvoiement strict, Casual = Tutoiement strict)
+- Lecture des vrais posts (si dispo)
 """
 import re
 import asyncio
@@ -17,11 +16,9 @@ from bot.config import (
 from bot.language_detector import NOM_LANGUE
 from bot.fb_client import get_derniers_posts_page
 
-# Mémoire anti-répétition locale (5 derniers messages)
 _dernieres_reponses: list[str] = []
 
 def _nettoyer(texte: str) -> str:
-    """Nettoie le texte des caractères invisibles et du formatage."""
     texte = re.sub(r'[\u200e\u200f\u200b\u200c\u200d\ufeff\u00ad\u2060\u180e\u202a-\u202e\u2066-\u2069]', '', texte)
     texte = re.sub(r'\*\*(.*?)\*\*', r'\1', texte)
     texte = re.sub(r'\*(.*?)\*', r'\1', texte)
@@ -29,7 +26,6 @@ def _nettoyer(texte: str) -> str:
     return texte.strip()
 
 def _verifier_repetition(texte: str) -> bool:
-    """Vérifie si le texte ressemble trop aux dernières réponses."""
     texte_clean = texte.lower().strip()[:50]
     for ancienne in _dernieres_reponses[-5:]:
         if texte_clean in ancienne.lower() or ancienne.lower()[:50] in texte_clean:
@@ -37,16 +33,14 @@ def _verifier_repetition(texte: str) -> bool:
     return False
 
 def _ajouter_memoire(texte: str) -> None:
-    """Ajoute la réponse à la mémoire locale."""
     _dernieres_reponses.append(texte)
     if len(_dernieres_reponses) > 5:
         _dernieres_reponses.pop(0)
 
 def _construire_historique(historique: list[dict]) -> str:
-    """Construit un résumé de l'historique pour le prompt."""
     if not historique:
         return ""
-    hist_texte = "\n📜 HISTORIQUE DE LA CONVERSATION :\n"
+    hist_texte = "\n📜 HISTORIQUE :\n"
     for msg in historique[-MAX_HISTORY_TURNS * 2:]:
         role = "Utilisateur" if msg.get('role') == 'user' else BOT_NAME
         contenu = msg.get('contenu', '')
@@ -54,9 +48,8 @@ def _construire_historique(historique: list[dict]) -> str:
     return hist_texte
 
 def _detecter_intention_rapide(message: str) -> str:
-    """Détection rapide pour choisir le ton (Pro vs Casual)."""
     msg_lower = message.lower()
-    mots_pro = ["abonner", "prix", "tarif", "payer", "offre", "produit", "service", "live", "formation", "concurren", "avantage", "différence", "contenu", "publiez", "page", "quoi", "quel", "comment", "pourquoi"]
+    mots_pro = ["abonner", "prix", "tarif", "payer", "offre", "produit", "service", "live", "formation", "concurren", "avantage", "différence", "contenu", "publiez", "page", "quoi", "quel", "comment", "pourquoi", "b2b", "business"]
     mots_stop = ["au revoir", "à plus", "ciao", "bye", "non", "je sais pas", "ok", "d'accord", "merci"]
 
     if any(m in msg_lower for m in mots_stop):
@@ -66,19 +59,18 @@ def _detecter_intention_rapide(message: str) -> str:
     return "casual"
 
 async def _get_resume_posts() -> str:
-    """Récupère les vrais posts pour injecter dans le prompt."""
     try:
         posts = await get_derniers_posts_page()
         if not posts:
-            return "📋 Aucun post récent trouvé."
-
-        resume = "📋 DERNIERS POSTS RÉELS PUBLIÉS (SOURCE DE VÉRITÉ) :\n"
-        for i, p in enumerate(posts[:5], 1):
-            msg = (p.get("message") or "Pas de texte")[:100]
+            return "📋 Aucun post récent trouvé (ou erreur API)."
+        
+        resume = "📋 DERNIERS POSTS RÉELS :\n"
+        for i, p in enumerate(posts[:3], 1):
+            msg = (p.get("message") or "")[:80]
             resume += f"{i}. {msg}\n"
         return resume
     except Exception:
-        return "📋 Impossible de récupérer les posts actuellement."
+        return "📋 Impossible de lire les posts."
 
 def _prompt_reponse(
     message: str,
@@ -88,31 +80,28 @@ def _prompt_reponse(
     historique: list[dict],
     resume_posts: str
 ) -> str:
-    """Construit le prompt dynamique selon le contexte."""
     nom_langue = NOM_LANGUE.get(langue, "français")
     date_actuelle = get_current_date()
     hist_texte = _construire_historique(historique)
-    contexte_texte = f"\n📌 CONTEXTE DU POST : « {contexte_post[:150]} »\n" if contexte_post else ""
+    contexte_texte = f"\n📌 CONTEXTE : « {contexte_post[:150]} »\n" if contexte_post else ""
 
     type_ton = _detecter_intention_rapide(message)
 
-    # --- LOGIQUE DE TON ---
     if type_ton == "stop":
         consigne_ton = """
-🛑 SIGNAL D'ARRÊT / RÉPONSE COURTE :
-L'utilisateur veut finir ou répond brièvement.
+🛑 SIGNAL D'ARRÊT :
 - Réponds TRÈS COURT (1 phrase max).
 - NE POSE PAS DE QUESTION.
-- Exemple : "À plus !", "Ok, je vois.", "Pas de souci."
+- Exemple : "À plus !", "Ok.", "Pas de souci."
 """
     elif type_ton == "pro":
         consigne_ton = f"""
-🚨 MODE PROFESSIONNEL (QUESTION SUR LA PAGE) :
-L'utilisateur demande des infos sur la page, le contenu, ou pourquoi s'abonner.
-- UTILISE LE VOUVOIEMENT ("vous", "votre").
-- TON FORMEL, SÉRIEUX, RESPECTUEUX.
-- BASE-TOI UNIQUEMENT SUR LES VRAIS POSTS CI-DESSOUS.
-- NE MENS JAMAIS. Si tu ne sais pas, dis "Je vérifie nos dernières publications".
+🚨 MODE PROFESSIONNEL (QUESTION) :
+- UTILISE LE VOUVOIEMENT ("vous", "votre") OBLIGATOIRE.
+- TON FORMEL, SÉRIEUX.
+- BASE-TOI SUR LES POSTS CI-DESSOUS SI POSSIBLE.
+- SI TU NE SAIS PAS : Dis simplement "Je n'ai pas cette information pour le moment" ou donne une définition générale si c'est une question de connaissance (ex: B2B).
+- NE DIS JAMAIS "Je vérifie", "Je consulte", "Un instant". Réponds tout de suite.
 
 {resume_posts}
 """
@@ -120,47 +109,39 @@ L'utilisateur demande des infos sur la page, le contenu, ou pourquoi s'abonner.
         consigne_ton = """
 ✅ MODE CONVERSATION (CASUAL) :
 - UTILISE LE TUTOIEMENT ("tu", "ton").
-- Ton décontracté, pote geek, parfois taquin.
-- Court, direct, imprévisible.
-- Ne parle PAS de tech sauf si l'utilisateur en parle.
+- Ton décontracté, pote geek.
+- Court, direct.
 """
 
-    # --- MÉMOIRE ANTI-RÉPÉTITION ---
     memoire_texte = ""
     if _dernieres_reponses:
         memoire_texte = "\n🚫 TES 5 DERNIÈRES RÉPONSES (NE LES RÉPÈTE PAS) :\n"
         for i, rep in enumerate(_dernieres_reponses[-5:], 1):
             memoire_texte += f"{i}. {rep[:80]}...\n"
 
-    prompt = f"""Tu es {BOT_NAME}, le community manager de Nyavodroid.
+    prompt = f"""Tu es {BOT_NAME}, community manager de Nyavodroid.
 
-📅 DATE ACTUELLE : {date_actuelle}
+📅 DATE : {date_actuelle}
 
 {consigne_ton}
 
 {memoire_texte}
 
-🎯 RÈGLES ABSOLUES :
-1. UNE SEULE RÉPONSE : Tu envoies UN SEUL message.
-2. PAS DE RÉPÉTITION : Ne redis jamais ce que tu viens de dire.
-3. VÉRITÉ TERRAIN : Ne mens JAMAIS sur le contenu publié.
-4. PAS DE PSYCHANALYSE : Ne dis JAMAIS "t'as l'air de...", "tu sembles...".
-5. LONGUEUR : 1 à 3 phrases maximum.
-
-❌ INTERDICTIONS :
-- JAMAIS de "Salut/Bonjour" sauf si c'est le TOUT PREMIER message.
-- JAMAIS de listes, markdown, gras.
-- JAMAIS plus d'1 emoji tous les 5 messages.
-- JAMAIS de "En tant qu'IA...", "Je suis un bot...".
+🎯 RÈGLES :
+1. UNE SEULE RÉPONSE.
+2. PAS DE RÉPÉTITION.
+3. VÉRITÉ : Ne mens pas.
+4. PAS DE "JE VÉRIFIE" : Réponds directement avec ce que tu sais.
+5. LONGUEUR : 1 à 3 phrases max.
 
 {contexte_texte}
 {hist_texte}
 
-📩 MESSAGE DE L'UTILISATEUR : "{message}"
+📩 MESSAGE : "{message}"
 
-🔑 CONSIGNE FINALE :
+🔑 CONSIGNE :
 Réponds en {nom_langue}.
-Adapte ton ton (Pro/Casual) selon la consigne ci-dessus.
+Adapte le ton (Pro/Casual).
 UN SEUL MESSAGE.
 
 RÉPONSE :"""
@@ -173,20 +154,14 @@ async def generer_reponse(
     contexte_post: str = "",
     historique: list[dict] | None = None
 ) -> str:
-    """Génère une réponse via Mistral ou Gemini."""
     if historique is None:
         historique = []
 
-    # 1. Récupérer les vrais posts AVANT de construire le prompt
     resume_posts = await _get_resume_posts()
-
-    # 2. Construire le prompt
     prompt = _prompt_reponse(message, langue, intention, contexte_post, historique, resume_posts)
 
-    # 3. Pause réflexion humaine
     await asyncio.sleep(random.uniform(2.0, 4.0))
 
-    # 4. Tentative Mistral
     if MISTRAL_API_KEY:
         try:
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -199,7 +174,7 @@ async def generer_reponse(
                     json={
                         "model": "mistral-small-latest",
                         "messages": [
-                            {"role": "system", "content": "Tu es un community manager professionnel. Tu réponds en te basant sur les faits. Tu ne mens jamais. Ton adapté au contexte."},
+                            {"role": "system", "content": "Tu es un community manager pro. Tu réponds directement. Tu ne dis jamais 'je vérifie'. Tu utilises le vouvoiement pour les questions pro."},
                             {"role": "user", "content": prompt}
                         ],
                         "max_tokens": 150,
@@ -210,16 +185,13 @@ async def generer_reponse(
                 reponse = _nettoyer(resp.json()["choices"][0]["message"]["content"])
 
                 if _verifier_repetition(reponse):
-                    print(f"🔁 Répétition détectée, fallback...")
-                    reponse = "Je vérifie cette information et je reviens vers vous rapidement."
+                    reponse = "Je n'ai pas d'autres informations à ce sujet pour le moment."
 
                 _ajouter_memoire(reponse)
-                print(f"🧠 Mistral final: {reponse[:60]}...")
                 return reponse
         except Exception as e:
-            print(f"⚠️  Mistral échoué : {e}")
+            print(f"⚠️ Mistral échoué : {e}")
 
-    # 5. Fallback Gemini
     if GEMINI_API_KEY:
         try:
             async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
@@ -238,20 +210,18 @@ async def generer_reponse(
                 reponse = _nettoyer(resp.json()["candidates"][0]["content"]["parts"][0]["text"])
 
                 if _verifier_repetition(reponse):
-                    print(f"🔁 Répétition détectée, fallback...")
-                    reponse = "Je vérifie cette information et je reviens vers vous rapidement."
+                    reponse = "Je n'ai pas d'autres informations à ce sujet pour le moment."
 
                 _ajouter_memoire(reponse)
-                print(f"🧠 Gemini final: {reponse[:60]}...")
                 return reponse
         except Exception as e:
-            print(f"⚠️  Gemini échoué : {e}")
+            print(f"⚠️ Gemini échoué : {e}")
 
-    # 6. Fallback ultime
+    # Fallback ULTIME (Direct, pas de "je vérifie")
     fallbacks = [
-        "Je vérifie cette information et je reviens vers vous rapidement.",
-        "Merci pour votre question. Je consulte nos dernières publications.",
-        "Un instant, je regarde ce qui a été publié récemment.",
+        "Je n'ai pas cette information précise pour le moment.",
+        "C'est une excellente question, mais je n'ai pas la réponse exacte sous la main.",
+        "Nous publions surtout des contenus tech et dev. Avez-vous une autre question ?",
     ]
     reponse = random.choice(fallbacks)
     _ajouter_memoire(reponse)
