@@ -173,3 +173,20 @@ async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "
     # Stop typing
     if type_envoi == "message":
         await _desactiver_action_frappe(sender_id)
+async def get_derniers_posts_page() -> list[dict]:
+    """Lit les 10 derniers posts réels publiés sur la page."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{BASE}/{FB_PAGE_ID}/posts",
+                params={
+                    "access_token": FB_PAGE_ACCESS_TOKEN,
+                    "fields": "message,created_time",
+                    "limit": 10
+                }
+            )
+            resp.raise_for_status()
+            return resp.json().get("data", [])
+    except Exception as e:
+        print(f"️ Erreur lecture posts FB : {e}")
+        return []
