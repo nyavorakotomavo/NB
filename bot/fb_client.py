@@ -1,9 +1,9 @@
 """
 NB — Client Facebook Graph API.
 CORRECTIONS :
-- Délai de frappe calculé selon la longueur du message (50ms/char + variance)
-- Minimum 15s entre réception et réponse
-- Anti-rafale : UN SEUL message par cycle, jamais de doublons
+- get_derniers_posts_page() pour lire les vrais posts (source de vérité)
+- Délai de frappe réaliste (15s base + temps de lecture)
+- Anti-doublon basé sur l'ID du message (géré dans server.py, mais sécurité ici aussi)
 """
 import asyncio
 import hashlib
@@ -15,9 +15,8 @@ from bot.config import FB_PAGE_ID, FB_PAGE_ACCESS_TOKEN, FB_APP_SECRET, GRAPH_VE
 
 BASE = f"https://graph.facebook.com/{GRAPH_VERSION}"
 
-# Cache anti-doublons (60 secondes)
-_derniers_messages_envoyes: dict[str, float] = {}
-_CACHE_DUREE = 60.0
+# Cache local de sécurité (au cas où server.py rate un doublon)
+_derniers_envois: dict[str, float] = {}
 
 def verifier_signature(payload: bytes, signature: str) -> bool:
     expected = "sha256=" + hmac.new(
@@ -48,19 +47,6 @@ async def _desactiver_action_frappe(sender_id: str) -> None:
             )
     except Exception:
         pass
-
-def _calculer_delai_frappe(longueur_texte: int) -> float:
-    """
-    Calcule un délai de frappe réaliste :
-    - Base : 15 secondes minimum (temps de lecture + réflexion)
-    - Frappe : 50ms par caractère + variance aléatoire
-    - Plafond : 45 secondes max
-    """
-    base = 15.0
-    frappe = longueur_texte * 0.05
-    variance = random.uniform(2.0, 8.0)
-    total = base + frappe + variance
-    return min(total, 45.0)
 
 async def repondre_message(sender_id: str, texte: str) -> bool:
     if not texte or not texte.strip():
@@ -117,64 +103,11 @@ async def get_post_message(post_id: str) -> str:
     except Exception:
         return ""
 
-async def get_derniers_posts() -> list[dict]:
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"{BASE}/{FB_PAGE_ID}/posts",
-                params={
-                    "access_token": FB_PAGE_ACCESS_TOKEN,
-                    "fields": "id,message,created_time",
-                    "limit": 10
-                }
-            )
-            resp.raise_for_status()
-            return resp.json().get("data", [])
-    except Exception:
-        return []
-
-async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "message") -> None:
-    """
-    Simule un humain réel :
-    - Vérifie le cache (60s) → pas de doublons
-    - Attend 15s minimum + temps de frappe réaliste
-    - Affiche "en train d'écrire..."
-    - Envoie UN SEUL message
-    """
-    if not texte or not texte.strip():
-        return
-    
-    # Anti-doublons
-    clef_cache = f"{sender_id}_{texte[:30]}"
-    if clef_cache in _derniers_messages_envoyes:
-        temps_ecoule = time.time() - _derniers_messages_envoyes[clef_cache]
-        if temps_ecoule < _CACHE_DUREE:
-            print(f"⏭️  Message déjà envoyé il y a {temps_ecoule:.0f}s, ignoré.")
-            return
-    
-    _derniers_messages_envoyes[clef_cache] = time.time()
-    
-    # Délai humain réaliste
-    delai = _calculer_delai_frappe(len(texte))
-    print(f"⏳ Délai humain : {delai:.1f}s pour {len(texte)} caractères")
-    await asyncio.sleep(delai)
-    
-    # Typing indicator
-    if type_envoi == "message":
-        await _envoyer_action_frappe(sender_id)
-        await asyncio.sleep(random.uniform(1.0, 2.5))
-    
-    # Envoi UNIQUE
-    if type_envoi == "commentaire":
-        await repondre_commentaire(sender_id, texte)
-    else:
-        await repondre_message(sender_id, texte)
-    
-    # Stop typing
-    if type_envoi == "message":
-        await _desactiver_action_frappe(sender_id)
 async def get_derniers_posts_page() -> list[dict]:
-    """Lit les 10 derniers posts réels publiés sur la page."""
+    """
+    🆕 LIT LES VRAIS POSTS publiés sur la page.
+    C'est la source de vérité pour éviter que le bot n'invente du contenu.
+    """
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -182,11 +115,64 @@ async def get_derniers_posts_page() -> list[dict]:
                 params={
                     "access_token": FB_PAGE_ACCESS_TOKEN,
                     "fields": "message,created_time",
-                    "limit": 10
+                    "limit": 5  # On prend les 5 derniers
                 }
             )
             resp.raise_for_status()
             return resp.json().get("data", [])
     except Exception as e:
-        print(f"️ Erreur lecture posts FB : {e}")
+        print(f"⚠️ Erreur lecture posts FB : {e}")
         return []
+
+def _calculer_delai_humain(longueur_texte: int) -> float:
+    """
+    Calcule un délai réaliste :
+    - 15s minimum (temps de lecture + réflexion)
+    - 50ms par caractère (vitesse de frappe)
+    - Variance aléatoire (2-8s)
+    """
+    base = 15.0
+    frappe = longueur_texte * 0.05
+    variance = random.uniform(2.0, 8.0)
+    total = base + frappe + variance
+    return min(total, 45.0)  # Plafond à 45s
+
+async def envoyer_message_humain(sender_id: str, texte: str, type_envoi: str = "message") -> None:
+    """
+    Simule un humain réel :
+    - Vérifie le cache (sécurité doublon)
+    - Attend 15s+ (délai réaliste)
+    - Affiche "en train d'écrire..."
+    - Envoie UN SEUL message
+    """
+    if not texte or not texte.strip():
+        return
+
+    # Sécurité doublon locale
+    clef_cache = f"{sender_id}_{texte[:30]}"
+    now = time.time()
+    if clef_cache in _derniers_envois:
+        if now - _derniers_envois[clef_cache] < 60:
+            print(f"⏭️ Message déjà envoyé récemment, ignoré (sécurité fb_client).")
+            return
+    _derniers_envois[clef_cache] = now
+
+    # Délai humain réaliste
+    delai = _calculer_delai_humain(len(texte))
+    print(f"⏳ Délai humain : {delai:.1f}s pour {len(texte)} chars")
+    await asyncio.sleep(delai)
+
+    # Typing indicator
+    if type_envoi == "message":
+        await _envoyer_action_frappe(sender_id)
+        await asyncio.sleep(random.uniform(1.0, 2.5))
+
+    # Envoi UNIQUE
+    if type_envoi == "commentaire":
+        await repondre_commentaire(sender_id, texte)
+    else:
+        await repondre_message(sender_id, texte)
+
+    # Stop typing
+    if type_envoi == "message":
+        await _desactiver_action_frappe(sender_id)
