@@ -59,16 +59,16 @@ async def verify_webhook(request: Request):
 async def handle_webhook(request: Request):
     body = await request.body()
     print("📨 REQUETE POST RECUE")
-    
+
     signature = request.headers.get("X-Hub-Signature-256", "")
     if not verifier_signature(body, signature):
         print("❌ Signature invalide")
         return Response(status_code=403)
     print("✅ Signature valide")
-    
+
     data = await request.json()
     print(f"📦 Données reçues: {str(data)[:200]}...")
-    
+
     for entry in data.get("entry", []):
         # Messages Messenger
         for messaging in entry.get("messaging", []):
@@ -76,25 +76,25 @@ async def handle_webhook(request: Request):
             msg_id = messaging.get("message", {}).get("mid", "")
             if not msg_id:
                 continue
-            
+
             if msg_id in _messages_traites:
                 print(f"⏭️  Message {msg_id} déjà traité, ignoré.")
                 continue
-            
+
             _messages_traites.add(msg_id)
             # Nettoyage du cache (garder seulement les 1000 derniers)
             if len(_messages_traites) > 1000:
                 _messages_traites.clear()
-            
+
             print("💬 Message Messenger reçu")
             await _gerer_message(messaging)
-        
+
         # Feed (commentaires + réactions)
         for change in entry.get("changes", []):
             value = change.get("value", {})
             item = value.get("item", "")
             print(f"📌 Changement: {item}")
-            
+
             if item == "comment":
                 comment_id = value.get("comment_id", "")
                 if comment_id in _messages_traites:
@@ -102,45 +102,45 @@ async def handle_webhook(request: Request):
                     continue
                 _messages_traites.add(comment_id)
                 await _gerer_commentaire(value)
-            
+
             elif item == "reaction":
                 await _gerer_reaction(value)
-    
+
     return {"status": "ok"}
 
 async def _gerer_message(messaging: dict) -> None:
     sender_id = messaging.get("sender", {}).get("id", "")
     message_data = messaging.get("message", {})
     texte = message_data.get("text", "")
-    
+
     if not sender_id or not texte:
         return
-    
+
     print(f"📩 Message de {sender_id}: {texte[:50]}...")
     t0 = time.time()
-    
+
     langue = detecter_langue(texte)
     intention = analyser_intention(texte)
-    
+
     if intention == "spam":
         print(f"🚫 Spam ignoré de {sender_id}")
         return
-    
+
     historique = get_historique(sender_id, "messenger")
     sauvegarder_message(sender_id, "messenger", "user", texte, langue)
-    
+
     reponse = await generer_reponse(
         message=texte,
         langue=langue,
         intention=intention,
         historique=historique,
     )
-    
+
     # ✅ UN SEUL MESSAGE avec délai humain
     await envoyer_message_humain(sender_id, reponse, type_envoi="message")
-    
+
     sauvegarder_message(sender_id, "messenger", "bot", reponse, langue)
-    
+
     temps = time.time() - t0
     log_interaction(sender_id, "message", langue, intention, temps)
     print(f"  💬 Messenger [{langue}/{intention}] → {reponse[:60]}... ({temps:.1f}s)")
@@ -149,29 +149,29 @@ async def _gerer_commentaire(value: dict) -> None:
     verb = value.get("verb", "")
     if verb != "add":
         return
-    
+
     comment_id = value.get("comment_id", "")
     sender_id = value.get("from", {}).get("id", "")
     texte = value.get("message", "")
     post_id = value.get("post_id", "")
-    
+
     if not comment_id or not texte:
         return
-    
+
     print(f"🗨️  Commentaire de {sender_id}: {texte[:50]}...")
     t0 = time.time()
-    
+
     langue = detecter_langue(texte)
     intention = analyser_intention(texte)
-    
+
     if intention == "spam":
         print(f"🚫 Spam ignoré de {sender_id}")
         return
-    
+
     contexte = await get_post_message(post_id) if post_id else ""
     historique = get_historique(sender_id, "comment")
     sauvegarder_message(sender_id, "comment", "user", texte, langue, post_id)
-    
+
     reponse = await generer_reponse(
         message=texte,
         langue=langue,
@@ -179,10 +179,10 @@ async def _gerer_commentaire(value: dict) -> None:
         contexte_post=contexte,
         historique=historique,
     )
-    
+
     await envoyer_message_humain(comment_id, reponse, type_envoi="commentaire")
     sauvegarder_message(sender_id, "comment", "bot", reponse, langue, post_id)
-    
+
     temps = time.time() - t0
     log_interaction(sender_id, "commentaire", langue, intention, temps, post_id)
     print(f"  🗨️  Commentaire [{langue}/{intention}] → {reponse[:60]}... ({temps:.1f}s)")
@@ -191,18 +191,18 @@ async def _gerer_reaction(value: dict) -> None:
     verb = value.get("verb", "")
     if verb != "add":
         return
-    
+
     post_id = value.get("post_id", "")
     reaction_type = value.get("reaction_type", "like")
-    
+
     if not post_id:
         return
-    
+
     if post_id in _reactions_traitees:
         return
-    
+
     _reactions_traitees.add(post_id)
-    
+
     remerciements = {
         "like": "Merci pour le soutien ! Ça fait plaisir de voir que le contenu vous parle 🙏",
         "love": "Wow, merci pour tout cet amour ! Vous êtes la meilleure communauté 🤖❤️",
@@ -212,12 +212,12 @@ async def _gerer_reaction(value: dict) -> None:
         "angry": "Merci pour votre retour. On s'améliore chaque jour 🙏",
         "care": "Merci pour votre bienveillance ! La communauté Nyavodroid est forte 🤝💚",
     }
-    
+
     texte = remerciements.get(
         reaction_type,
         "Merci pour votre réaction ! Restez connectés pour plus de contenu 🚀",
     )
-    
+
     try:
         await commenter_post(post_id, texte)
         log_interaction("", "reaction", "fr", "remerciement", 0.0, post_id)
