@@ -1,7 +1,7 @@
 """
 NB — Serveur FastAPI (webhook Facebook).
 CORRECTIONS CRITIQUES :
-- Anti-rafale basé sur l'ID du message (pas le texte)
+- Anti-rafale basé sur l'ID du message (mid) → Plus jamais de doublons
 - UN SEUL traitement par message entrant
 - Réponse immédiate aux questions directes
 """
@@ -37,8 +37,9 @@ print("=" * 50)
 app = FastAPI(title=f"{BOT_NAME} — Nyavodroid Bot")
 
 # 🚫 Cache anti-rafale basé sur l'ID du message (pas le texte)
+# C'est la clé pour éviter les doublons Facebook
 _messages_traites: set[str] = set()
-_CACHE_DUREE_MSG = 120  # 2 minutes
+_MAX_CACHE_SIZE = 1000
 
 _reactions_traitees: set[str] = set()
 
@@ -67,39 +68,48 @@ async def handle_webhook(request: Request):
     print("✅ Signature valide")
 
     data = await request.json()
-    print(f"📦 Données reçues: {str(data)[:200]}...")
+    # print(f"📦 Données reçues: {str(data)[:200]}...") # Optionnel pour debug
 
     for entry in data.get("entry", []):
-        # Messages Messenger
+        # --- Messages Messenger ---
         for messaging in entry.get("messaging", []):
-            # 🚫 Anti-rafale : vérifier l'ID du message
+            # 🚫 ANTI-DOUBLON : Vérifier l'ID unique du message (mid)
             msg_id = messaging.get("message", {}).get("mid", "")
+            
+            # Si pas d'ID (ex: événement de livraison), on ignore ou on traite différemment
             if not msg_id:
                 continue
 
             if msg_id in _messages_traites:
-                print(f"⏭️  Message {msg_id} déjà traité, ignoré.")
+                print(f"⏭️  Message {msg_id} déjà traité, ignoré (Anti-Doublon).")
                 continue
 
+            # Marquer comme traité
             _messages_traites.add(msg_id)
-            # Nettoyage du cache (garder seulement les 1000 derniers)
-            if len(_messages_traites) > 1000:
-                _messages_traites.clear()
+            
+            # Nettoyage mémoire (éviter fuite mémoire si le bot tourne pendant des mois)
+            if len(_messages_traites) > _MAX_CACHE_SIZE:
+                # On vide la moitié du cache pour repartir léger
+                _messages_traites.clear() 
+                print("🧹 Cache anti-doublon vidé")
 
             print("💬 Message Messenger reçu")
             await _gerer_message(messaging)
 
-        # Feed (commentaires + réactions)
+        # --- Feed (commentaires + réactions) ---
         for change in entry.get("changes", []):
             value = change.get("value", {})
             item = value.get("item", "")
-            print(f"📌 Changement: {item}")
+            # print(f"📌 Changement: {item}")
 
             if item == "comment":
                 comment_id = value.get("comment_id", "")
+                
+                # Anti-doublon commentaires
                 if comment_id in _messages_traites:
                     print(f"⏭️  Commentaire {comment_id} déjà traité, ignoré.")
                     continue
+                
                 _messages_traites.add(comment_id)
                 await _gerer_commentaire(value)
 
@@ -129,6 +139,7 @@ async def _gerer_message(messaging: dict) -> None:
     historique = get_historique(sender_id, "messenger")
     sauvegarder_message(sender_id, "messenger", "user", texte, langue)
 
+    # Génération de la réponse (avec lecture des vrais posts)
     reponse = await generer_reponse(
         message=texte,
         langue=langue,
@@ -136,7 +147,7 @@ async def _gerer_message(messaging: dict) -> None:
         historique=historique,
     )
 
-    # ✅ UN SEUL MESSAGE avec délai humain
+    # ✅ ENVOI UNIQUE avec délai humain (géré dans fb_client)
     await envoyer_message_humain(sender_id, reponse, type_envoi="message")
 
     sauvegarder_message(sender_id, "messenger", "bot", reponse, langue)
@@ -227,7 +238,7 @@ async def _gerer_reaction(value: dict) -> None:
 
 @app.get("/")
 async def health():
-    return {"status": "ok", "bot": BOT_NAME, "version": "2.0"}
+    return {"status": "ok", "bot": BOT_NAME, "version": "3.0-Stable"}
 
 if __name__ == "__main__":
     import uvicorn
